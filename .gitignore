@@ -4,3 +4,9 @@
 .Ruserdata
 
 *.Rproj
+
+app_v2.r
+
+bad_app.R
+
+~$*.xlsx
