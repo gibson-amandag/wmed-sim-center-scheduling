@@ -3,6 +3,7 @@ library(readxl)
 library(dplyr)
 library(tidyr)
 library(openxlsx)
+library(zip)
 
 # Helper to load all sheets
 load_data <- function(file) {
@@ -91,7 +92,8 @@ ui <- fluidPage(
   sidebarLayout(
     sidebarPanel(
       fileInput("file", "Upload Excel File", accept = ".xlsx"),
-      downloadButton("download", "Download Schedules")
+      downloadButton("download", "Download Schedules"),
+      downloadButton("download_students", "Download Student Schedules")
     ),
     mainPanel(
       tabsetPanel(
@@ -473,7 +475,8 @@ server <- function(input, output, session) {
     # Get all time blocks for this group
     long_sched <- sched$long
     student_sched <- long_sched %>%
-      filter(studentNum == studentNum, lastName == !!lastName, firstName == !!firstName, groupNum == !!groupNum)
+      filter(studentNum == studentNum, lastName == !!lastName, firstName == !!firstName, groupNum == !!groupNum) %>%
+      arrange(timeBlock)
 
     # If no schedule, return
     if (nrow(student_sched) == 0) return(tags$div("No schedule found for this student."))
@@ -522,7 +525,7 @@ server <- function(input, output, session) {
 
     tagList(
       tags$div(
-        tags$h4("Student Schedule"),
+        tags$h4(paste(firstName, lastName)),
         tags$p(tags$b("Group #:"), groupNum),
         tags$p(tags$b("Student #:"), studentNum),
         tags$p(tags$b("Date:"), format(as.Date(group_date), "%A, %B %d, %Y")),
@@ -545,6 +548,7 @@ server <- function(input, output, session) {
     )
   })
 
+  # ---- Download Handlers ----
   output$download <- downloadHandler(
     filename = function() {
       "Generated_Schedules.xlsx"
@@ -662,6 +666,98 @@ server <- function(input, output, session) {
         }
       }
       saveWorkbook(wb, file, overwrite = TRUE)
+    }
+  )
+
+  # ---- Student Schedules Download Handler ----
+  output$download_students <- downloadHandler(
+    filename = function() {
+      "Student_Schedules.zip"
+    },
+    content = function(file) {
+      tmpdir <- tempdir()
+      group_files <- c()
+      for (group_name in names(data$schedules)) {
+        sched <- data$schedules[[group_name]]
+        groupNum <- as.integer(gsub("^Group_", "", group_name))
+        group_students <- data$studentInfo[data$studentInfo$groupNum == groupNum, ]
+        if (nrow(group_students) == 0) next
+        wb <- createWorkbook()
+        for (i in seq_len(nrow(group_students))) {
+          stu <- group_students[i, ]
+          studentNum <- stu$studentNum
+          lastName <- stu$lastName
+          firstName <- stu$firstName
+          ws_name <- paste0(studentNum, "_", substr(gsub("[^A-Za-z0-9]", "", lastName), 1, 12))
+          ws_name <- substr(ws_name, 1, 31) # Excel sheet name limit
+
+          # Get this student's schedule
+          long_sched <- sched$long
+          student_sched <- long_sched %>%
+            filter(studentNum == studentNum, lastName == !!lastName, firstName == !!firstName, groupNum == !!groupNum) %>%
+            arrange(timeBlock)
+
+          # Prepare table: Time, Station Info
+          timeblock_times <- sched$timeblock_times
+          rows <- lapply(seq_len(nrow(student_sched)), function(j) {
+            row <- student_sched[j, ]
+            tb_time <- if (!is.null(timeblock_times[[row$timeBlock]])) timeblock_times[[row$timeBlock]] else row$timeBlock
+            station_info <- paste0(
+              row$niceName,
+              if (!is.null(row$room1) && !is.na(row$room1) && row$room1 != "") paste0("\nRoom: ", row$room1) else "",
+              if (!is.null(row$room2) && !is.na(row$room2) && row$room2 != "") paste0("\nRoom: ", row$room2) else "",
+              if (!is.null(row$faculty) && !is.na(row$faculty) && row$faculty != "") paste0("\nFaculty: ", row$faculty) else "Faculty: TBD",
+              if (!is.null(row$notes) && !is.na(row$notes) && row$notes != "") paste0("\nNotes: ", row$notes) else ""
+            )
+            # Add stationColor for later styling
+            scol <- if ("stationColor" %in% names(row) && !is.na(row$stationColor) && row$stationColor != "") row$stationColor else NA
+            c(tb_time, station_info, scol)
+          })
+          df <- as.data.frame(do.call(rbind, rows), stringsAsFactors = FALSE)
+          names(df) <- c("Time", "Station Info", "stationColor__internal__")
+
+          addWorksheet(wb, ws_name)
+
+          # Write student info as a title block
+          group_date <- sched$date
+          group_start <- sched$startTime
+          group_end <- sched$endTime
+          info_lines <- c(
+            paste0(firstName, " ", lastName),
+            paste0("Group #: ", groupNum),
+            paste0("Student #: ", studentNum),
+            paste0("Name: ", lastName, ", ", firstName),
+            paste0("Date: ", format(as.Date(group_date), "%A, %B %d, %Y")),
+            paste0("Start time: ", format(strptime(format(as_hms(as.numeric(group_start) * 86400)), "%H:%M:%S"), "%I:%M %p")),
+            paste0("End time: ", format(strptime(format(as_hms(as.numeric(group_end) * 86400)), "%H:%M:%S"), "%I:%M %p"))
+          )
+          writeData(wb, ws_name, info_lines, startRow = 1, startCol = 1)
+          addStyle(wb, ws_name, createStyle(textDecoration = "bold", fontSize = 12), rows = 1, cols = 1, gridExpand = TRUE)
+          # Write the table below the info block (exclude color column)
+          writeData(wb, ws_name, df[, 1:2], startRow = length(info_lines) + 2, startCol = 1, borders = "all", headerStyle = createStyle(textDecoration = "bold", border = "Bottom"))
+          setColWidths(wb, ws_name, cols = 1, widths = 18)
+          setColWidths(wb, ws_name, cols = 2, widths = 40)
+          wrap_style <- createStyle(wrapText = TRUE)
+          addStyle(wb, ws_name, wrap_style, rows = (length(info_lines) + 2):(nrow(df) + length(info_lines) + 2), cols = 1:2, gridExpand = TRUE, stack = TRUE)
+
+          # Add color formatting for station info cells (column 2)
+          for (r in seq_len(nrow(df))) {
+            scol <- df$stationColor__internal__[r]
+            if (!is.na(scol) && scol != "") {
+              addStyle(
+                wb, ws_name,
+                createStyle(fgFill = scol),
+                rows = r + length(info_lines) + 2, cols = 2, gridExpand = TRUE, stack = TRUE
+              )
+            }
+          }
+        }
+        group_file <- file.path(tmpdir, paste0("Group_", groupNum, "_Student_Schedules.xlsx"))
+        saveWorkbook(wb, group_file, overwrite = TRUE)
+        group_files <- c(group_files, group_file)
+      }
+      # Zip all group files
+      zip::zip(zipfile = file, files = group_files, mode = "cherry-pick")
     }
   )
 }
