@@ -91,7 +91,6 @@ ui <- fluidPage(
   sidebarLayout(
     sidebarPanel(
       fileInput("file", "Upload Excel File", accept = ".xlsx"),
-      actionButton("generate", "Generate Schedules"),
       downloadButton("download", "Download Schedules")
     ),
     mainPanel(
@@ -259,7 +258,8 @@ server <- function(input, output, session) {
       )
   })
 
-  observeEvent(input$generate, {
+  # Automatically generate schedules when all required data is loaded
+  observe({
     req(
       data$studentInfo,
       data$groupInfo,
@@ -321,7 +321,14 @@ server <- function(input, output, session) {
             }
           )
           cells <- list(tags$td(station_info))
-          for (tb in timeblock_cols) {
+          prev_studentNum <- NULL
+          prev_label <- NULL
+          prev_color <- NULL
+          prev_textColor <- NULL
+          colspan <- 1
+          cell_info <- list()
+          for (j in seq_along(timeblock_cols)) {
+            tb <- timeblock_cols[j]
             val <- row[[tb]]
             # Extract studentNum for coloring
             studentNum <- NA
@@ -341,15 +348,42 @@ server <- function(input, output, session) {
                 color <- data$fillColor$code[data$fillColor$studentNum == studentNum]
               }
             }
-            style_str <- paste0("background-color:", color, ";text-align:center;")
-            if (exists("textColor") && !is.null(textColor)) style_str <- paste0(style_str, "color:", textColor, ";")
-            cells[[length(cells) + 1]] <- tags$td(
-              cell_label,
-              style = style_str
-            )
+            # Merge logic
+            if (j == 1) {
+              prev_studentNum <- studentNum
+              prev_label <- cell_label
+              prev_color <- color
+              prev_textColor <- if (exists("textColor")) textColor else NULL
+              colspan <- 1
+            } else if (identical(studentNum, prev_studentNum) && cell_label != "Break") {
+              colspan <- colspan + 1
+            } else {
+              # Add previous cell
+              style_str <- paste0("background-color:", prev_color, ";text-align:center;")
+              if (!is.null(prev_textColor)) style_str <- paste0(style_str, "color:", prev_textColor, ";")
+              cell_info[[length(cell_info) + 1]] <- tags$td(
+                prev_label,
+                style = style_str,
+                colspan = if (colspan > 1) colspan else NULL
+              )
+              # Start new cell
+              prev_studentNum <- studentNum
+              prev_label <- cell_label
+              prev_color <- color
+              prev_textColor <- if (exists("textColor")) textColor else NULL
+              colspan <- 1
+            }
             if (exists("textColor", inherits = FALSE)) rm(textColor, inherits = FALSE)
           }
-          do.call(tags$tr, cells)
+          # Add last cell
+          style_str <- paste0("background-color:", prev_color, ";text-align:center;")
+          if (!is.null(prev_textColor)) style_str <- paste0(style_str, "color:", prev_textColor, ";")
+          cell_info[[length(cell_info) + 1]] <- tags$td(
+            prev_label,
+            style = style_str,
+            colspan = if (colspan > 1) colspan else NULL
+          )
+          do.call(tags$tr, c(cells, cell_info))
         })
 
         # Date header above the table
