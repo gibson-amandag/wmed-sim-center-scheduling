@@ -95,20 +95,15 @@ ui <- fluidPage(
     ),
     mainPanel(
       tabsetPanel(
-        tabPanel("Student Info", tableOutput("studentInfo")),
-        tabPanel("Group Info", tableOutput("groupInfo")),
-        tabPanel("Time Blocks", tableOutput("timeBlockInfo")),
-        tabPanel("Schedule Template", uiOutput("schedule")), # changed from tableOutput to uiOutput
         tabPanel("Generated Schedules", uiOutput("scheduleTabs")),
-        tabPanel("Explore Group Schedules",
-          selectInput("explore_group", "Select Group", choices = NULL),
-          radioButtons("explore_format", "Format", choices = c("wide", "long"), inline = TRUE),
-          tableOutput("explore_group_table")
-        ),
         tabPanel("Student Schedule",
           selectInput("student_select", "Select Student", choices = NULL),
           uiOutput("student_schedule_table")
-        )
+        ),
+        tabPanel("Student Info", tableOutput("studentInfo")),
+        tabPanel("Group Info", tableOutput("groupInfo")),
+        tabPanel("Time Blocks", tableOutput("timeBlockInfo")),
+        tabPanel("Schedule Template", uiOutput("schedule"))
       )
     )
   )
@@ -188,7 +183,13 @@ server <- function(input, output, session) {
           paste0("Notes: ", row$notes)
         }
       )
-      cells <- list(tags$td(station_info))
+      # Use stationColor if present
+      station_style <- if ("stationColor" %in% names(row) && !is.na(row$stationColor) && row$stationColor != "") {
+        paste0("background-color:", row$stationColor, ";")
+      } else {
+        ""
+      }
+      cells <- list(tags$td(station_info, style = station_style))
       prev_studentNum <- NULL
       colspan <- 1
       cell_info <- list()
@@ -324,7 +325,13 @@ server <- function(input, output, session) {
               paste0("Notes: ", row$notes)
             }
           )
-          cells <- list(tags$td(station_info))
+          # Use stationColor if present
+          station_style <- if ("stationColor" %in% names(row) && !is.na(row$stationColor) && row$stationColor != "") {
+            paste0("background-color:", row$stationColor, ";")
+          } else {
+            ""
+          }
+          cells <- list(tags$td(station_info, style = station_style))
           prev_studentNum <- NULL
           prev_label <- NULL
           prev_color <- NULL
@@ -495,9 +502,15 @@ server <- function(input, output, session) {
           paste0("Notes: ", row$notes)
         }
       )
+      # Use stationColor if present
+      station_style <- if ("stationColor" %in% names(row) && !is.na(row$stationColor) && row$stationColor != "") {
+        paste0("background-color:", row$stationColor, ";")
+      } else {
+        ""
+      }
       tags$tr(
         tags$td(tb_time),
-        tags$td(station_info)
+        tags$td(station_info, style = station_style)
       )
     })
 
@@ -552,29 +565,73 @@ server <- function(input, output, session) {
           if (!is.null(timeblock_times[[tb]])) timeblock_times[[tb]] else tb
         }))
 
-        # Prepare data rows
+        # Prepare data rows (do not merge yet)
         rows <- lapply(seq_len(nrow(sched$wide)), function(i) {
           row <- sched$wide[i, ]
-          # Compose station info (as in the UI)
+          # Use stationColor if present
+          station_color <- if ("stationColor" %in% names(row) && !is.na(row$stationColor) && row$stationColor != "") row$stationColor else NA
           station_info <- paste0(
-            row$niceName, "\n",
-            if (!is.null(row$room1) && !is.na(row$room1) && row$room1 != "") paste0("Room: ", row$room1, "\n") else "",
-            if (!is.null(row$room2) && !is.na(row$room2) && row$room2 != "") paste0("Room: ", row$room2, "\n") else "",
-            if (!is.null(row$faculty) && !is.na(row$faculty) && row$faculty != "") paste0("Faculty: ", row$faculty, "\n") else "",
-            if (!is.null(row$notes) && !is.na(row$notes) && row$notes != "") paste0("Notes: ", row$notes) else ""
+            row$niceName,
+            if (!is.null(row$room1) && !is.na(row$room1) && row$room1 != "") paste0("\nRoom: ", row$room1) else "",
+            if (!is.null(row$room2) && !is.na(row$room2) && row$room2 != "") paste0("\nRoom: ", row$room2) else "",
+            if (!is.null(row$faculty) && !is.na(row$faculty) && row$faculty != "") paste0("\nFaculty: ", row$faculty) else "Faculty: TBD",
+            if (!is.null(row$notes) && !is.na(row$notes) && row$notes != "") paste0("\nNotes: ", row$notes) else ""
           )
-          c(station_info, as.character(unlist(row[timeblock_cols])))
+          c(station_info, as.character(unlist(row[timeblock_cols])), station_color)
         })
+        # Add stationColor as a hidden column for later styling
         df <- as.data.frame(do.call(rbind, rows), stringsAsFactors = FALSE)
-        names(df) <- header
+        names(df) <- c(header, "stationColor__internal__")
 
         # Write date as a title row above the table
         writeData(wb, ws_name, paste0("Date: ", format(as.Date(sched$date), "%A, %B %d, %Y")), startRow = 1, startCol = 1)
         addStyle(wb, ws_name, createStyle(textDecoration = "bold", halign = "center", fontSize = 14), rows = 1, cols = 1, gridExpand = TRUE)
         mergeCells(wb, ws_name, cols = 1:(length(header)), rows = 1)
 
-        # Write the table below the date
-        writeData(wb, ws_name, df, startRow = 3, startCol = 1, borders = "all", headerStyle = createStyle(textDecoration = "bold", border = "Bottom"))
+        # Write the table below the date (exclude the internal color column)
+        writeData(wb, ws_name, df[, 1:length(header)], startRow = 3, startCol = 1, borders = "all", headerStyle = createStyle(textDecoration = "bold", border = "Bottom"))
+
+        # Set column width for column A (Station column)
+        setColWidths(wb, ws_name, cols = 1, widths = 40)
+        setColWidths(wb, ws_name, cols = 2:length(header), widths = 26)
+
+        # Wrap text for all data and header cells
+        wrap_style <- createStyle(wrapText = TRUE)
+        addStyle(wb, ws_name, wrap_style, rows = 3:(nrow(df) + 3), cols = 1:length(header), gridExpand = TRUE, stack = TRUE)
+
+        # Merge adjacent cells with the same value for each row (timeblock columns only)
+        for (i in seq_len(nrow(df))) {
+          start_col <- 2 # first timeblock col
+          end_col <- length(header)
+          j <- start_col
+          while (j <= end_col) {
+            val <- df[i, j]
+            run_start <- j
+            while (j < end_col && df[i, j + 1] == val && val != "" && !is.na(val)) {
+              j <- j + 1
+            }
+            if (j > run_start) {
+              mergeCells(wb, ws_name, cols = run_start:j, rows = i + 3)
+              # Only keep value in first cell, blank out others
+              for (k in (run_start + 1):j) {
+                writeData(wb, ws_name, "", startCol = k, startRow = i + 3)
+              }
+            }
+            j <- j + 1
+          }
+        }
+
+        # Add color formatting for station info cells (column 1)
+        for (i in seq_len(nrow(df))) {
+          scol <- df$stationColor__internal__[i]
+          if (!is.na(scol) && scol != "") {
+            addStyle(
+              wb, ws_name,
+              createStyle(fgFill = scol),
+              rows = i + 3, cols = 1, gridExpand = TRUE, stack = TRUE
+            )
+          }
+        }
 
         # Optionally, add color formatting for student cells
         for (col in seq_along(timeblock_cols)) {
