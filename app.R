@@ -273,17 +273,112 @@ server <- function(input, output, session) {
   output$scheduleTabs <- renderUI({
     req(data$schedules)
     tabs <- lapply(names(data$schedules), function(name) {
-      tabPanel(name, tableOutput(paste0("sched_", name)))
+      tabPanel(name, uiOutput(paste0("sched_", name)))
     })
     do.call(tabsetPanel, tabs)
   })
 
   observe({
-    req(data$schedules)
+    req(data$schedules, data$fillColor)
     lapply(names(data$schedules), function(name) {
-      output[[paste0("sched_", name)]] <- renderTable({
-        data$schedules[[name]]
-      }, striped = TRUE, bordered = TRUE)
+      output[[paste0("sched_", name)]] <- renderUI({
+        scheds <- data$schedules[[name]]
+        wide_sched <- scheds$wide
+        timeblock_times <- scheds$timeblock_times
+        group_date <- scheds$date
+
+        # Identify time block columns
+        timeblock_cols <- grep("^TimeBlock", names(wide_sched), value = TRUE)
+
+        # Build table header: Station + time labels (from timeblock_times)
+        header <- tags$tr(
+          tags$th("Station"),
+          lapply(timeblock_cols, function(tb) {
+            tags$th(if (!is.null(timeblock_times[[tb]])) timeblock_times[[tb]] else tb)
+          })
+        )
+
+        # Build table rows with color coding and station info in first column
+        rows <- lapply(seq_len(nrow(wide_sched)), function(i) {
+          row <- wide_sched[i, ]
+          # Compose station info for the first column (like template schedule)
+          station_info <- tags$div(
+            tags$b(row$niceName),
+            tags$br(),
+            if (!is.null(row$room1) && !is.na(row$room1) && row$room1 != "") {
+              paste0("Room 1: ", row$room1)
+            },
+            if (!is.null(row$room2) && !is.na(row$room2) && row$room2 != "") {
+              list(tags$br(), paste0("Room 2: ", row$room2))
+            },
+            tags$br(),
+            if (!is.null(row$faculty) && !is.na(row$faculty) && row$faculty != "") {
+              paste0("Faculty: ", row$faculty)
+            },
+            tags$br(),
+            if (!is.null(row$notes) && !is.na(row$notes) && row$notes != "") {
+              paste0("Notes: ", row$notes)
+            }
+          )
+          cells <- list(tags$td(station_info))
+          for (tb in timeblock_cols) {
+            val <- row[[tb]]
+            # Extract studentNum for coloring
+            studentNum <- NA
+            cell_label <- val
+            if (is.na(val) || val == "") {
+              cell_label <- "Break"
+              color <- "#717171"
+              textColor <- "white"
+            } else {
+              matches <- regmatches(val, regexpr("^[0-9]+", val))
+              if (length(matches) > 0 && matches != "") {
+                studentNum <- as.integer(matches)
+              }
+              color <- "#FFFFFF"
+              textColor <- NULL
+              if (!is.na(studentNum) && studentNum %in% data$fillColor$studentNum) {
+                color <- data$fillColor$code[data$fillColor$studentNum == studentNum]
+              }
+            }
+            style_str <- paste0("background-color:", color, ";text-align:center;")
+            if (exists("textColor") && !is.null(textColor)) style_str <- paste0(style_str, "color:", textColor, ";")
+            cells[[length(cells) + 1]] <- tags$td(
+              cell_label,
+              style = style_str
+            )
+            if (exists("textColor", inherits = FALSE)) rm(textColor, inherits = FALSE)
+          }
+          do.call(tags$tr, cells)
+        })
+
+        # Date header above the table
+        date_header <- if (!is.null(group_date) && !is.na(group_date)) {
+          tags$h4(
+            style = "text-align:center;margin-bottom:10px;",
+            format(as.Date(group_date), "%A, %B %d, %Y")
+          )
+        } else {
+          NULL
+        }
+
+        tagList(
+          date_header,
+          tags$table(
+            style = "border-collapse:collapse;width:100%;margin:auto;",
+            tags$thead(header),
+            tags$tbody(rows)
+          ) %>%
+            tagAppendChild(
+              tags$style(HTML("
+                table tr th, table tr td {
+                  border: 1px solid #333 !important;
+                  padding: 8px 12px !important;
+                }
+              "))
+            )
+        )
+      })
     })
   })
 
