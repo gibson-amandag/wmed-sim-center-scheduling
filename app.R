@@ -12,13 +12,25 @@ load_data <- function(file) {
         groupInfo     = read.xlsx(file, sheet = "groupInfo", detectDates = TRUE),
         fillColor     = read.xlsx(file, sheet = "fillColor", detectDates = TRUE),
         timeBlockInfo = read.xlsx(file, sheet = "timeBlockInfo", detectDates = TRUE),
-        schedule      = read.xlsx(file, sheet = "schedule", detectDates = TRUE)
+        schedule      = read.xlsx(file, sheet = "schedule", detectDates = TRUE),
+        faculty       = read.xlsx(file, sheet = "faculty", detectDates = TRUE)
     )
 }
 
 # Generate group schedules
 generate_group_schedules <- function(data) {
   schedules <- list()
+
+  faculty_long <- pivot_longer(
+    data$faculty,
+    cols = starts_with("group"),
+    names_to = "groupNum",
+    values_to = "faculty",
+    names_prefix = "group"
+  )
+  # Ensure groupNum is character for join
+  faculty_long$groupNum <- as.character(faculty_long$groupNum)
+
   for (group in unique(data$studentInfo$groupNum)) {
     group_students <- data$studentInfo %>% filter(groupNum == group)
     group_meta     <- data$groupInfo %>% filter(groupNum == group)
@@ -28,8 +40,19 @@ generate_group_schedules <- function(data) {
     time_blocks <- grep("^TimeBlock", names(sched), value = TRUE)
     tb_info <- data$timeBlockInfo
 
+    # --- Assign faculty for this group using faculty_long ---
+    # Join sched with faculty_long by niceName and groupNum
+    sched_with_faculty <- sched %>%
+      left_join(
+        faculty_long %>% filter(groupNum == as.character(group)),
+        by = c("shortKey")
+      ) %>%
+      mutate(
+        faculty = ifelse(!is.na(faculty), faculty, ifelse(!is.null(sched$faculty), sched$faculty, NA))
+      )
+
     # Wide version: replace studentNum with "studentNum. lastName, firstName"
-    wide_sched <- sched
+    wide_sched <- sched_with_faculty
     for (tb in time_blocks) {
       wide_sched[[tb]] <- sapply(wide_sched[[tb]], function(sn) {
         if (is.na(sn) || sn == "") return("")
@@ -44,7 +67,7 @@ generate_group_schedules <- function(data) {
 
     # Long version: one row per station/time block (no date/time columns)
     long_sched <- tidyr::pivot_longer(
-      sched,
+      sched_with_faculty,
       cols = all_of(time_blocks),
       names_to = "timeBlock",
       values_to = "studentNum"
@@ -123,6 +146,7 @@ server <- function(input, output, session) {
     data$fillColor     <- tables$fillColor
     data$timeBlockInfo <- tables$timeBlockInfo
     data$schedule      <- tables$schedule
+    data$faculty      <- tables$faculty
   })
 
   output$studentInfo <- renderTable({
@@ -240,7 +264,7 @@ server <- function(input, output, session) {
         if (exists("textColor", inherits = FALSE)) rm(textColor, inherits = FALSE)
       }
       # Add last cell
-      style_str <- paste0("background-color:", prev_color, ";text-align:center;")
+      style_str <- if (!is.null(prev_color)) paste0("background-color:", prev_color, ";text-align:center;") else "text-align:center;"
       if (!is.null(prev_textColor)) style_str <- paste0(style_str, "color:", prev_textColor, ";")
       cell_info[[length(cell_info) + 1]] <- tags$td(
         prev_label,
@@ -355,10 +379,16 @@ server <- function(input, output, session) {
               if (length(matches) > 0 && matches != "") {
                 studentNum <- as.integer(matches)
               }
-              color <- "#FFFFFF"
-              textColor <- NULL
-              if (!is.na(studentNum) && studentNum %in% data$fillColor$studentNum) {
-                color <- data$fillColor$code[data$fillColor$studentNum == studentNum]
+              # Only color if student name is present (i.e., val contains ". ")
+              if (!is.na(studentNum) && grepl("\\. ", val)) {
+                color <- "#FFFFFF"
+                textColor <- NULL
+                if (studentNum %in% data$fillColor$studentNum) {
+                  color <- data$fillColor$code[data$fillColor$studentNum == studentNum]
+                }
+              } else {
+                color <- NULL
+                textColor <- NULL
               }
             }
             # Merge logic
@@ -389,7 +419,7 @@ server <- function(input, output, session) {
             if (exists("textColor", inherits = FALSE)) rm(textColor, inherits = FALSE)
           }
           # Add last cell
-          style_str <- paste0("background-color:", prev_color, ";text-align:center;")
+          style_str <- if (!is.null(prev_color)) paste0("background-color:", prev_color, ";text-align:center;") else "text-align:center;"
           if (!is.null(prev_textColor)) style_str <- paste0(style_str, "color:", prev_textColor, ";")
           cell_info[[length(cell_info) + 1]] <- tags$td(
             prev_label,
