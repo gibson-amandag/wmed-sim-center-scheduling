@@ -174,10 +174,10 @@ server <- function(input, output, session) {
         tags$b(row$niceName),
         tags$br(),
         if (!is.null(row$room1) && !is.na(row$room1) && row$room1 != "") {
-          paste0("Room 1: ", row$room1)
+          paste0("Room: ", row$room1)
         },
         if (!is.null(row$room2) && !is.na(row$room2) && row$room2 != "") {
-          list(tags$br(), paste0("Room 2: ", row$room2))
+          list(tags$br(), paste0("Room: ", row$room2))
         },
         tags$br(),
         if (!is.null(row$faculty) && !is.na(row$faculty) && row$faculty != "") {
@@ -310,10 +310,10 @@ server <- function(input, output, session) {
             tags$b(row$niceName),
             tags$br(),
             if (!is.null(row$room1) && !is.na(row$room1) && row$room1 != "") {
-              paste0("Room 1: ", row$room1)
+              paste0("Room: ", row$room1)
             },
             if (!is.null(row$room2) && !is.na(row$room2) && row$room2 != "") {
-              list(tags$br(), paste0("Room 2: ", row$room2))
+              list(tags$br(), paste0("Room: ", row$room2))
             },
             tags$br(),
             if (!is.null(row$faculty) && !is.na(row$faculty) && row$faculty != "") {
@@ -481,10 +481,10 @@ server <- function(input, output, session) {
         tags$b(row$niceName),
         tags$br(),
         if (!is.null(row$room1) && !is.na(row$room1) && row$room1 != "") {
-          paste0("Room 1: ", row$room1)
+          paste0("Room: ", row$room1)
         },
         if (!is.null(row$room2) && !is.na(row$room2) && row$room2 != "") {
-          list(tags$br(), paste0("Room 2: ", row$room2))
+          list(tags$br(), paste0("Room: ", row$room2))
         },
         tags$br(),
         if (!is.null(row$faculty) && !is.na(row$faculty) && row$faculty != "") {
@@ -539,8 +539,70 @@ server <- function(input, output, session) {
     content = function(file) {
       wb <- createWorkbook()
       for (name in names(data$schedules)) {
-        addWorksheet(wb, name)
-        writeData(wb, name, data$schedules[[name]])
+        sched <- data$schedules[[name]]
+        ws_name <- substr(name, 1, 31) # Excel sheet name limit
+
+        # Add worksheet for each group
+        addWorksheet(wb, ws_name)
+
+        # Prepare header row: Station + time labels
+        timeblock_cols <- grep("^TimeBlock", names(sched$wide), value = TRUE)
+        timeblock_times <- sched$timeblock_times
+        header <- c("Station", sapply(timeblock_cols, function(tb) {
+          if (!is.null(timeblock_times[[tb]])) timeblock_times[[tb]] else tb
+        }))
+
+        # Prepare data rows
+        rows <- lapply(seq_len(nrow(sched$wide)), function(i) {
+          row <- sched$wide[i, ]
+          # Compose station info (as in the UI)
+          station_info <- paste0(
+            row$niceName, "\n",
+            if (!is.null(row$room1) && !is.na(row$room1) && row$room1 != "") paste0("Room: ", row$room1, "\n") else "",
+            if (!is.null(row$room2) && !is.na(row$room2) && row$room2 != "") paste0("Room: ", row$room2, "\n") else "",
+            if (!is.null(row$faculty) && !is.na(row$faculty) && row$faculty != "") paste0("Faculty: ", row$faculty, "\n") else "",
+            if (!is.null(row$notes) && !is.na(row$notes) && row$notes != "") paste0("Notes: ", row$notes) else ""
+          )
+          c(station_info, as.character(unlist(row[timeblock_cols])))
+        })
+        df <- as.data.frame(do.call(rbind, rows), stringsAsFactors = FALSE)
+        names(df) <- header
+
+        # Write date as a title row above the table
+        writeData(wb, ws_name, paste0("Date: ", format(as.Date(sched$date), "%A, %B %d, %Y")), startRow = 1, startCol = 1)
+        addStyle(wb, ws_name, createStyle(textDecoration = "bold", halign = "center", fontSize = 14), rows = 1, cols = 1, gridExpand = TRUE)
+        mergeCells(wb, ws_name, cols = 1:(length(header)), rows = 1)
+
+        # Write the table below the date
+        writeData(wb, ws_name, df, startRow = 3, startCol = 1, borders = "all", headerStyle = createStyle(textDecoration = "bold", border = "Bottom"))
+
+        # Optionally, add color formatting for student cells
+        for (col in seq_along(timeblock_cols)) {
+          tb <- timeblock_cols[col]
+          for (i in seq_len(nrow(sched$wide))) {
+            val <- sched$wide[[tb]][i]
+            studentNum <- NA
+            if (!is.na(val) && val != "") {
+              matches <- regmatches(val, regexpr("^[0-9]+", val))
+              if (length(matches) > 0 && matches != "") {
+                studentNum <- as.integer(matches)
+              }
+            }
+            color <- NULL
+            if (!is.na(studentNum) && studentNum %in% data$fillColor$studentNum) {
+              color <- data$fillColor$code[data$fillColor$studentNum == studentNum]
+            } else if (is.na(val) || val == "") {
+              color <- "#717171"
+            }
+            if (!is.null(color)) {
+              addStyle(
+                wb, ws_name,
+                createStyle(fgFill = color, halign = "center", textDecoration = NULL, fontColour = ifelse(color == "#717171", "#FFFFFF", "#000000")),
+                rows = i + 3, cols = col + 1, gridExpand = TRUE, stack = TRUE
+              )
+            }
+          }
+        }
       }
       saveWorkbook(wb, file, overwrite = TRUE)
     }
