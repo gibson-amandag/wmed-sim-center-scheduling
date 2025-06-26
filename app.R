@@ -104,6 +104,10 @@ ui <- fluidPage(
           selectInput("explore_group", "Select Group", choices = NULL),
           radioButtons("explore_format", "Format", choices = c("wide", "long"), inline = TRUE),
           tableOutput("explore_group_table")
+        ),
+        tabPanel("Student Schedule",
+          selectInput("student_select", "Select Student", choices = NULL),
+          uiOutput("student_schedule_table")
         )
       )
     )
@@ -421,16 +425,112 @@ server <- function(input, output, session) {
     updateSelectInput(session, "explore_group", choices = names(data$schedules))
   })
 
-  # Show selected group schedule in selected format
-  output$explore_group_table <- renderTable({
-    req(data$schedules, input$explore_group, input$explore_format)
-    scheds <- data$schedules[[input$explore_group]]
-    if (input$explore_format == "wide") {
-      scheds$wide
-    } else {
-      scheds$long
-    }
-  }, striped = TRUE, bordered = TRUE)
+  # Update student choices for student schedule tab
+  observeEvent(data$studentInfo, {
+    req(data$studentInfo)
+    # Use all students, not just group 1
+    choices <- setNames(
+      paste0(data$studentInfo$groupNum, "-", data$studentInfo$studentNum),
+      paste0(
+        "Group ", data$studentInfo$groupNum, " - ",
+        data$studentInfo$studentNum, ". ",
+        data$studentInfo$lastName, ", ",
+        data$studentInfo$firstName
+      )
+    )
+    updateSelectInput(session, "student_select", choices = choices)
+  })
+
+  # Show selected student's schedule (nice display)
+  output$student_schedule_table <- renderUI({
+    req(data$schedules, input$student_select, data$studentInfo)
+    # Parse groupNum and studentNum from selection
+    sel <- strsplit(input$student_select, "-", fixed = TRUE)[[1]]
+    if (length(sel) != 2) return(NULL)
+    groupNum <- as.integer(sel[1])
+    studentNum <- as.integer(sel[2])
+    selected_row <- data$studentInfo[data$studentInfo$groupNum == groupNum & data$studentInfo$studentNum == studentNum, ]
+    if (nrow(selected_row) == 0) return(NULL)
+    lastName <- selected_row$lastName[1]
+    firstName <- selected_row$firstName[1]
+
+    # Find the group schedule
+    group_name <- paste0("Group_", groupNum)
+    if (!group_name %in% names(data$schedules)) return(NULL)
+    sched <- data$schedules[[group_name]]
+    group_date <- sched$date
+    group_start <- sched$startTime
+    group_end <- sched$endTime
+    timeblock_times <- sched$timeblock_times
+
+    # Get all time blocks for this group
+    long_sched <- sched$long
+    student_sched <- long_sched %>%
+      filter(studentNum == studentNum, lastName == !!lastName, firstName == !!firstName, groupNum == !!groupNum)
+
+    # If no schedule, return
+    if (nrow(student_sched) == 0) return(tags$div("No schedule found for this student."))
+
+    # Build table rows: one per time block, show time instead of "TimeBlockX"
+    rows <- lapply(seq_len(nrow(student_sched)), function(i) {
+      row <- student_sched[i, ]
+      # Get the time for this time block
+      tb_time <- if (!is.null(timeblock_times[[row$timeBlock]])) timeblock_times[[row$timeBlock]] else row$timeBlock
+      # Compose station info (like template schedule)
+      station_info <- tags$div(
+        tags$b(row$niceName),
+        tags$br(),
+        if (!is.null(row$room1) && !is.na(row$room1) && row$room1 != "") {
+          paste0("Room 1: ", row$room1)
+        },
+        if (!is.null(row$room2) && !is.na(row$room2) && row$room2 != "") {
+          list(tags$br(), paste0("Room 2: ", row$room2))
+        },
+        tags$br(),
+        if (!is.null(row$faculty) && !is.na(row$faculty) && row$faculty != "") {
+          paste0("Faculty: ", row$faculty)
+        },
+        tags$br(),
+        if (!is.null(row$notes) && !is.na(row$notes) && row$notes != "") {
+          paste0("Notes: ", row$notes)
+        }
+      )
+      tags$tr(
+        tags$td(tb_time),
+        tags$td(station_info)
+      )
+    })
+
+    # Table header
+    header <- tags$tr(
+      tags$th("Time"),
+      tags$th("Station Info")
+    )
+
+    tagList(
+      tags$div(
+        tags$h4("Student Schedule"),
+        tags$p(tags$b("Group #:"), groupNum),
+        tags$p(tags$b("Student #:"), studentNum),
+        tags$p(tags$b("Date:"), format(as.Date(group_date), "%A, %B %d, %Y")),
+        tags$p(tags$b("Start time:"), format(strptime(format(as_hms(as.numeric(group_start) * 86400)), "%H:%M:%S"), "%I:%M %p")),
+        tags$p(tags$b("End time:"), format(strptime(format(as_hms(as.numeric(group_end) * 86400)), "%H:%M:%S"), "%I:%M %p"))
+      ),
+      tags$table(
+        style = "border-collapse:collapse;width:100%;margin:auto;",
+        tags$thead(header),
+        tags$tbody(rows)
+      ) %>%
+        tagAppendChild(
+          tags$style(HTML("
+            table tr th, table tr td {
+              border: 1px solid #333 !important;
+              padding: 8px 12px !important;
+            }
+          "))
+        )
+    )
+  })
 
   output$download <- downloadHandler(
     filename = function() {
