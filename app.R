@@ -128,7 +128,21 @@ ui <- fluidPage(
         tabPanel("Student Info", tableOutput("studentInfo")),
         tabPanel("Group Info", tableOutput("groupInfo")),
         tabPanel("Time Blocks", tableOutput("timeBlockInfo")),
-        tabPanel("Schedule Template", uiOutput("schedule"))
+        tabPanel("Schedule Template", uiOutput("schedule")),
+        # --- NEW TAB ---
+        tabPanel("Template Creator",
+          fluidRow(
+            column(4, numericInput("tmpl_num_groups", "# of groups", 2, min = 1)),
+            column(4, numericInput("tmpl_max_students", "Max # of students/group", 6, min = 1)),
+            column(4, numericInput("tmpl_total_students", "Total # of students", 12, min = 1))
+          ),
+          fluidRow(
+            column(4, numericInput("tmpl_num_timeblocks", "# of time blocks", 6, min = 1)),
+            column(4, numericInput("tmpl_num_starttimes", "# of startTimes (e.g. AM/PM)", 2, min = 1)),
+            column(4, numericInput("tmpl_num_stations", "# of stations", 6, min = 1))
+          ),
+          downloadButton("download_template", "Download Blank Template")
+        )
       )
     )
   )
@@ -791,6 +805,115 @@ server <- function(input, output, session) {
       }
       # Zip all group files
       zip::zip(zipfile = file, files = group_files, mode = "cherry-pick")
+    }
+  )
+
+  # --- TEMPLATE CREATOR LOGIC ---
+  template_data <- reactive({
+    req(
+      input$tmpl_num_groups,
+      input$tmpl_max_students,
+      input$tmpl_total_students,
+      input$tmpl_num_timeblocks,
+      input$tmpl_num_starttimes,
+      input$tmpl_num_stations
+    )
+    num_groups <- input$tmpl_num_groups
+    max_students <- input$tmpl_max_students
+    total_students <- input$tmpl_total_students
+    num_timeblocks <- input$tmpl_num_timeblocks
+    num_starttimes <- input$tmpl_num_starttimes
+    num_stations <- input$tmpl_num_stations
+
+    # studentInfo
+    studentInfo <- data.frame(
+      studentNum = seq_len(total_students),
+      groupNum = rep(seq_len(num_groups), each = max_students, length.out = total_students),
+      lastName = "",
+      firstName = "",
+      stringsAsFactors = FALSE
+    )
+
+    # groupInfo
+    groupInfo <- data.frame(
+      groupNum = seq_len(num_groups),
+      date = "",
+      startTime = "",
+      endTime = "",
+      timeOfDay = if (num_starttimes > 1) rep(c("AM", "PM"), length.out = num_groups) else "",
+      stringsAsFactors = FALSE
+    )
+
+    # fillColor
+    fillColor <- data.frame(
+      studentNum = seq_len(total_students),
+      code = "",
+      stringsAsFactors = FALSE
+    )
+
+    # timeBlockInfo
+    timeBlockInfo <- data.frame(
+      timeBlock = paste0("TimeBlock", seq_len(num_timeblocks)),
+      amTimes = "",
+      pmTimes = if (num_starttimes > 1) "" else NULL,
+      stringsAsFactors = FALSE
+    )
+
+    # schedule
+    schedule <- data.frame(
+      niceName = paste0("Station ", seq_len(num_stations)),
+      shortKey = paste0("S", seq_len(num_stations)),
+      room1 = "",
+      room2 = "",
+      faculty = "",
+      notes = "",
+      stationColor = "",
+      stringsAsFactors = FALSE
+    )
+    for (i in seq_len(num_timeblocks)) {
+      schedule[[paste0("TimeBlock", i)]] <- ""
+    }
+
+    # faculty
+    faculty <- data.frame(
+      niceName = paste0("Station ", seq_len(num_stations)),
+      shortKey = paste0("S", seq_len(num_stations)),
+      stringsAsFactors = FALSE
+    )
+    for (g in seq_len(num_groups)) {
+      faculty[[paste0("group", g)]] <- ""
+    }
+
+    list(
+      studentInfo = studentInfo,
+      groupInfo = groupInfo,
+      fillColor = fillColor,
+      timeBlockInfo = timeBlockInfo,
+      schedule = schedule,
+      faculty = faculty
+    )
+  })
+
+  output$download_template <- downloadHandler(
+    filename = function() {
+      "Blank_OSCE_Template.xlsx"
+    },
+    content = function(file) {
+      tmpl <- template_data()
+      wb <- createWorkbook()
+      addWorksheet(wb, "studentInfo")
+      writeData(wb, "studentInfo", tmpl$studentInfo)
+      addWorksheet(wb, "groupInfo")
+      writeData(wb, "groupInfo", tmpl$groupInfo)
+      addWorksheet(wb, "fillColor")
+      writeData(wb, "fillColor", tmpl$fillColor)
+      addWorksheet(wb, "timeBlockInfo")
+      writeData(wb, "timeBlockInfo", tmpl$timeBlockInfo)
+      addWorksheet(wb, "schedule")
+      writeData(wb, "schedule", tmpl$schedule)
+      addWorksheet(wb, "faculty")
+      writeData(wb, "faculty", tmpl$faculty)
+      saveWorkbook(wb, file, overwrite = TRUE)
     }
   )
 }
