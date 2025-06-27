@@ -152,7 +152,7 @@ server <- function(input, output, session) {
   output$studentInfo <- renderTable({
     req(data$studentInfo)
     df <- data$studentInfo
-    df$groupNum <- as.integer(df$groupNum)
+    df$groupNum <- as.character(df$groupNum)
     df$studentNum <- as.integer(df$studentNum)
     df
   }, striped = TRUE, bordered = TRUE)
@@ -486,7 +486,7 @@ server <- function(input, output, session) {
     # Parse groupNum and studentNum from selection
     sel <- strsplit(input$student_select, "-", fixed = TRUE)[[1]]
     if (length(sel) != 2) return(NULL)
-    groupNum <- as.integer(sel[1])
+    groupNum <- as.character(sel[1])
     studentNum <- as.integer(sel[2])
     selected_row <- data$studentInfo[data$studentInfo$groupNum == groupNum & data$studentInfo$studentNum == studentNum, ]
     if (nrow(selected_row) == 0) return(NULL)
@@ -709,7 +709,7 @@ server <- function(input, output, session) {
       group_files <- c()
       for (group_name in names(data$schedules)) {
         sched <- data$schedules[[group_name]]
-        groupNum <- as.integer(gsub("^Group_", "", group_name))
+        groupNum <- as.character(gsub("^Group_", "", group_name))
         group_students <- data$studentInfo[data$studentInfo$groupNum == groupNum, ]
         if (nrow(group_students) == 0) next
         wb <- createWorkbook()
@@ -726,6 +726,9 @@ server <- function(input, output, session) {
           student_sched <- long_sched %>%
             filter(studentNum == studentNum, lastName == !!lastName, firstName == !!firstName, groupNum == !!groupNum) %>%
             arrange(timeBlock)
+
+          # --- SKIP if student_sched is empty ---
+          if (nrow(student_sched) == 0) next
 
           # Prepare table: Time, Station Info
           timeblock_times <- sched$timeblock_times
