@@ -132,14 +132,39 @@ ui <- fluidPage(
         # --- NEW TAB ---
         tabPanel("Template Creator",
           fluidRow(
-            column(4, numericInput("tmpl_num_groups", "# of groups", 2, min = 1)),
-            column(4, numericInput("tmpl_max_students", "Max # of students/group", 6, min = 1)),
-            column(4, numericInput("tmpl_total_students", "Total # of students", 12, min = 1))
+            column(12, h3("Group information")),
+            column(6, p("How many groups of students are you scheduling?")),
+            column(6, numericInput("tmpl_num_groups", "# of groups", 2, min = 1)),
+            column(6, p("What is the maximum number of students per group?")),
+            column(6, numericInput("tmpl_max_students", "Max # of students/group", 6, min = 1))
           ),
           fluidRow(
-            column(4, numericInput("tmpl_num_timeblocks", "# of time blocks", 6, min = 1)),
-            column(4, numericInput("tmpl_num_starttimes", "# of startTimes (e.g. AM/PM)", 2, min = 1)),
-            column(4, numericInput("tmpl_num_stations", "# of stations", 6, min = 1))
+            column(12, h3("Total number of students")),
+            column(6, p("What is the total number of students across all groups?")),
+            column(6, numericInput("tmpl_total_students", "Total # of students", 12, min = 1))
+          ),
+          fluidRow(
+            column(12, h3("Time block information")),
+            column(6, 
+              p("How many time blocks are there in the schedule?"),
+              em("This is the number of time slots for each station, and it can include breaks")
+            ),
+            column(6, numericInput("tmpl_num_timeblocks", "# of time blocks", 6, min = 1))
+          ),
+          fluidRow(
+            column(12, h3("Start time information")),
+            column(6, p("How many start times are there in the schedule?"),
+              em("You might have different start times for different groups, e.g. AM/PM")
+            ),
+            column(6, numericInput("tmpl_num_starttimes", "# of startTimes", 2, min = 1))
+          ),
+          # --- NEW: Start time names and time block times ---
+          uiOutput("tmpl_starttime_names_ui"),
+          uiOutput("tmpl_timeblock_times_ui"),
+          fluidRow(
+            column(12, h3("Station information")),
+            column(6, p("How many stations are there in the schedule?")),
+            column(6, numericInput("tmpl_num_stations", "# of stations", 6, min = 1))
           ),
           downloadButton("download_template", "Download Blank Template")
         )
@@ -572,6 +597,7 @@ server <- function(input, output, session) {
         tags$h4(paste(firstName, lastName)),
         tags$p(tags$b("Group #:"), groupNum),
         tags$p(tags$b("Student #:"), studentNum),
+        tags$p(tags$b("Name:"), paste(lastName, firstName)),
         tags$p(tags$b("Date:"), format(as.Date(group_date), "%A, %B %d, %Y")),
         tags$p(tags$b("Start time:"), format(strptime(format(as_hms(as.numeric(group_start) * 86400)), "%H:%M:%S"), "%I:%M %p")),
         tags$p(tags$b("End time:"), format(strptime(format(as_hms(as.numeric(group_end) * 86400)), "%H:%M:%S"), "%I:%M %p"))
@@ -808,6 +834,42 @@ server <- function(input, output, session) {
     }
   )
 
+  # --- UI for start time names ---
+  output$tmpl_starttime_names_ui <- renderUI({
+    req(input$tmpl_num_starttimes)
+    n <- input$tmpl_num_starttimes
+    isolate({
+      fluidRow(
+        column(12, h4("Start time labels")),
+        lapply(seq_len(n), function(i) {
+          column(6, textInput(paste0("tmpl_starttime_name_", i), paste0("Start time label ", i), value = ifelse(i == 1, "AM", ifelse(i == 2, "PM", paste0("Start", i)))))
+        })
+      )
+    })
+  })
+
+  # --- UI for time block times for each start time ---
+  output$tmpl_timeblock_times_ui <- renderUI({
+    req(input$tmpl_num_timeblocks, input$tmpl_num_starttimes)
+    n_tb <- input$tmpl_num_timeblocks
+    n_st <- input$tmpl_num_starttimes
+    start_names <- sapply(seq_len(n_st), function(i) input[[paste0("tmpl_starttime_name_", i)]])
+    tagList(
+      lapply(seq_len(n_st), function(st_idx) {
+        fluidRow(
+          column(12, h5(paste0("Times for ", ifelse(!is.null(start_names[st_idx]) && start_names[st_idx] != "", start_names[st_idx], paste0("Start ", st_idx))))),
+          lapply(seq_len(n_tb), function(tb_idx) {
+            column(3, textInput(
+              paste0("tmpl_timeblock_", st_idx, "_", tb_idx),
+              paste0("TimeBlock", tb_idx, " time"),
+              value = ""
+            ))
+          })
+        )
+      })
+    )
+  })
+
   # --- TEMPLATE CREATOR LOGIC ---
   template_data <- reactive({
     req(
@@ -825,6 +887,21 @@ server <- function(input, output, session) {
     num_starttimes <- input$tmpl_num_starttimes
     num_stations <- input$tmpl_num_stations
 
+    # Get start time names
+    start_time_names <- sapply(seq_len(num_starttimes), function(i) {
+      nm <- input[[paste0("tmpl_starttime_name_", i)]]
+      if (is.null(nm) || nm == "") paste0("Start", i) else nm
+    })
+
+    # Get time block times for each start time
+    timeblock_times <- lapply(seq_len(num_starttimes), function(st_idx) {
+      sapply(seq_len(num_timeblocks), function(tb_idx) {
+        val <- input[[paste0("tmpl_timeblock_", st_idx, "_", tb_idx)]]
+        if (is.null(val)) "" else val
+      })
+    })
+    names(timeblock_times) <- start_time_names
+
     # studentInfo
     studentInfo <- data.frame(
       studentNum = seq_len(total_students),
@@ -840,7 +917,7 @@ server <- function(input, output, session) {
       date = "",
       startTime = "",
       endTime = "",
-      timeOfDay = if (num_starttimes > 1) rep(c("AM", "PM"), length.out = num_groups) else "",
+      timeOfDay = rep(start_time_names, length.out = num_groups),
       stringsAsFactors = FALSE
     )
 
@@ -854,10 +931,12 @@ server <- function(input, output, session) {
     # timeBlockInfo
     timeBlockInfo <- data.frame(
       timeBlock = paste0("TimeBlock", seq_len(num_timeblocks)),
-      amTimes = "",
-      pmTimes = if (num_starttimes > 1) "" else NULL,
       stringsAsFactors = FALSE
     )
+    # Add a column for each start time name, with the entered times
+    for (i in seq_along(start_time_names)) {
+      timeBlockInfo[[start_time_names[i]]] <- timeblock_times[[i]]
+    }
 
     # schedule
     schedule <- data.frame(
