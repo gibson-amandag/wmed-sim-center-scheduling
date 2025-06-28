@@ -195,16 +195,14 @@ server <- function(input, output, session) {
     req(input$tmpl_num_starttimes)
     n <- input$tmpl_num_starttimes
     # Update stored labels if changed
-    isolate({
-      for (i in seq_len(n)) {
-        key <- paste0("tmpl_starttime_name_", i)
-        val <- input[[key]]
-        if (!is.null(val)) tmpl_inputs$starttime_names[[key]] <- val
-      }
-      # Remove any extra labels if n decreased
-      to_remove <- setdiff(names(tmpl_inputs$starttime_names), paste0("tmpl_starttime_name_", seq_len(n)))
-      tmpl_inputs$starttime_names[to_remove] <- NULL
-    })
+    for (i in seq_len(n)) {
+      key <- paste0("tmpl_starttime_name_", i)
+      val <- input[[key]]
+      if (!is.null(val)) tmpl_inputs$starttime_names[[key]] <- val
+    }
+    # Remove any extra labels if n decreased
+    to_remove <- setdiff(names(tmpl_inputs$starttime_names), paste0("tmpl_starttime_name_", seq_len(n)))
+    tmpl_inputs$starttime_names[to_remove] <- NULL
   })
 
   # --- Observe and update time block times ---
