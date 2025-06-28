@@ -109,6 +109,15 @@ generate_group_schedules <- function(data) {
   return(schedules)
 }
 
+get_start_time_label <- function(index, start_time_names) {
+  idx <- suppressWarnings(as.integer(index))
+  if (!is.na(idx) && idx >= 1 && idx <= length(start_time_names)) {
+    return(start_time_names[idx])
+  } else {
+    return(NA)
+  }
+}
+
 # UI
 ui <- fluidPage(
   titlePanel("OSCE Schedule Generator"),
@@ -229,7 +238,7 @@ server <- function(input, output, session) {
 
   # --- Observe and update group info ---
   observe({
-    req(input$tmpl_num_groups)
+    req(input$tmpl_num_groups, input$tmpl_num_starttimes)
     n <- input$tmpl_num_groups
     isolate({
       # Save current values
@@ -240,13 +249,13 @@ server <- function(input, output, session) {
         startTime <- input[[paste0(prefix, "startTime")]]
         endTime <- input[[paste0(prefix, "endTime")]]
         timeOfDay <- input[[paste0(prefix, "timeOfDay")]]
+        # print(paste("group", groupNum, "timeOfDay", timeOfDay, is.null(timeOfDay)))
         tmpl_group_info$groups[[i]] <- list(
           groupNum = if (!is.null(groupNum)) groupNum else paste0("Group ", i),
-        #   date = if (!is.null(date)) date else "",
           date = if (!is.null(date)) date else NULL,
           startTime = if (!is.null(startTime)) startTime else "",
           endTime = if (!is.null(endTime)) endTime else "",
-          timeOfDay = if (!is.null(timeOfDay)) timeOfDay else ""
+          timeOfDay = if (!is.null(timeOfDay)) timeOfDay else NA
         )
       }
       # Remove extra if n decreased
@@ -326,6 +335,10 @@ server <- function(input, output, session) {
           } else {
             as.character(i)
           }
+          # print(
+          #   str(timeOfDay_val),
+          #   str(get_start_time_label(timeOfDay_val, start_time_names))
+          # )
           fluidRow(
             column(2, textInput(paste0(prefix, "groupNum"), paste0("Group ", i, " Name"), value = groupNum_val)),
             column(2, dateInput(paste0(prefix, "date"), "Date", value = if (!is.null(date_val)) date_val else NULL)),
@@ -1157,8 +1170,7 @@ server <- function(input, output, session) {
       groupInfo$date[i] <- if (!is.null(group) && !is.null(group$date)) group$date else ""
       groupInfo$startTime[i] <- if (!is.null(group) && !is.null(group$startTime)) group$startTime else ""
       groupInfo$endTime[i] <- if (!is.null(group) && !is.null(group$endTime)) group$endTime else ""
-      groupInfo$timeOfDay[i] <- if (!is.null(group) && !is.null(group$timeOfDay)) group$timeOfDay else start_time_names[ifelse(i <= length(start_time_names), i, 1)]
-    }
+      groupInfo$timeOfDay[i] <- if (!is.null(group) && !is.null(group$timeOfDay)) group$timeOfDay else as.character(ifelse(i <= length(start_time_names), i, 1))    }
 
     # fillColor
     fillColor <- data.frame(
