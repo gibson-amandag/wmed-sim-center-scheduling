@@ -124,7 +124,11 @@ ui <- fluidPage(
           fluidRow(
             column(12, h3("Group information")),
             column(6, p("How many groups of students are you scheduling?")),
-            column(6, numericInput("tmpl_num_groups", "# of groups", 2, min = 1)),
+            column(6, numericInput("tmpl_num_groups", "# of groups", 2, min = 1))
+          ),
+          # --- NEW: Group info entry UI ---
+          uiOutput("tmpl_group_info_ui"),
+          fluidRow(
             column(6, p("What is the maximum number of students per group?")),
             column(6, numericInput("tmpl_max_students", "Max # of students/group", 6, min = 1))
           ),
@@ -183,6 +187,9 @@ server <- function(input, output, session) {
     timeblock_times = list()
   )
 
+  # --- NEW: Store group info in reactiveValues ---
+  tmpl_group_info <- reactiveValues(groups = list())
+
   # --- Observe and update start time labels ---
   observe({
     req(input$tmpl_num_starttimes)
@@ -219,6 +226,35 @@ server <- function(input, output, session) {
       }))
       to_remove <- setdiff(names(tmpl_inputs$timeblock_times), valid_keys)
       tmpl_inputs$timeblock_times[to_remove] <- NULL
+    })
+  })
+
+  # --- Observe and update group info ---
+  observe({
+    req(input$tmpl_num_groups)
+    n <- input$tmpl_num_groups
+    isolate({
+      # Save current values
+      for (i in seq_len(n)) {
+        prefix <- paste0("tmpl_group_", i, "_")
+        groupNum <- input[[paste0(prefix, "groupNum")]]
+        date <- input[[paste0(prefix, "date")]]
+        startTime <- input[[paste0(prefix, "startTime")]]
+        endTime <- input[[paste0(prefix, "endTime")]]
+        timeOfDay <- input[[paste0(prefix, "timeOfDay")]]
+        tmpl_group_info$groups[[i]] <- list(
+          groupNum = if (!is.null(groupNum)) groupNum else paste0("Group ", i),
+        #   date = if (!is.null(date)) date else "",
+          date = if (!is.null(date)) date else NULL,
+          startTime = if (!is.null(startTime)) startTime else "",
+          endTime = if (!is.null(endTime)) endTime else "",
+          timeOfDay = if (!is.null(timeOfDay)) timeOfDay else ""
+        )
+      }
+      # Remove extra if n decreased
+      if (length(tmpl_group_info$groups) > n) {
+        tmpl_group_info$groups <- tmpl_group_info$groups[seq_len(n)]
+      }
     })
   })
 
@@ -264,6 +300,37 @@ server <- function(input, output, session) {
         )
       })
     )
+  })
+
+  # --- UI for group info entry ---
+  output$tmpl_group_info_ui <- renderUI({
+    req(input$tmpl_num_groups, input$tmpl_num_starttimes)
+    n <- input$tmpl_num_groups
+    start_time_names <- sapply(seq_len(input$tmpl_num_starttimes), function(i) {
+      key <- paste0("tmpl_starttime_name_", i)
+      nm <- tmpl_inputs$starttime_names[[key]]
+      if (is.null(nm) || nm == "") paste0("Start", i) else nm
+    })
+    isolate({
+      tagList(
+        lapply(seq_len(n), function(i) {
+          prefix <- paste0("tmpl_group_", i, "_")
+          group <- tmpl_group_info$groups[[i]]
+          groupNum_val <- if (!is.null(group) && !is.null(group$groupNum)) group$groupNum else paste0("Group ", i)
+          date_val <- if (!is.null(group) && !is.null(group$date)) group$date else NULL
+          startTime_val <- if (!is.null(group) && !is.null(group$startTime)) group$startTime else ""
+          endTime_val <- if (!is.null(group) && !is.null(group$endTime)) group$endTime else ""
+          timeOfDay_val <- if (!is.null(group) && !is.null(group$timeOfDay)) group$timeOfDay else start_time_names[ifelse(i <= length(start_time_names), i, 1)]
+          fluidRow(
+            column(2, textInput(paste0(prefix, "groupNum"), paste0("Group ", i, " Name"), value = groupNum_val)),
+            column(2, dateInput(paste0(prefix, "date"), "Date", value = if (!is.null(date_val)) date_val else NULL)),
+            column(2, textInput(paste0(prefix, "startTime"), "Start Time (e.g. 08:00)", value = startTime_val)),
+            column(2, textInput(paste0(prefix, "endTime"), "End Time (e.g. 12:00)", value = endTime_val)),
+            column(2, selectInput(paste0(prefix, "timeOfDay"), "Time of Day", choices = start_time_names, selected = timeOfDay_val))
+          )
+        })
+      )
+    })
   })
 
   # Helper to load all sheets
@@ -1070,15 +1137,23 @@ server <- function(input, output, session) {
       stringsAsFactors = FALSE
     )
 
-    # groupInfo
+    # --- NEW: groupInfo from tmpl_group_info ---
     groupInfo <- data.frame(
-      groupNum = seq_len(num_groups),
-      date = "",
-      startTime = "",
-      endTime = "",
-      timeOfDay = rep(start_time_names, length.out = num_groups),
+      groupNum = character(num_groups),
+      date = character(num_groups),
+      startTime = character(num_groups),
+      endTime = character(num_groups),
+      timeOfDay = character(num_groups),
       stringsAsFactors = FALSE
     )
+    for (i in seq_len(num_groups)) {
+      group <- tmpl_group_info$groups[[i]]
+      groupInfo$groupNum[i] <- if (!is.null(group) && !is.null(group$groupNum)) group$groupNum else paste0("Group ", i)
+      groupInfo$date[i] <- if (!is.null(group) && !is.null(group$date)) group$date else ""
+      groupInfo$startTime[i] <- if (!is.null(group) && !is.null(group$startTime)) group$startTime else ""
+      groupInfo$endTime[i] <- if (!is.null(group) && !is.null(group$endTime)) group$endTime else ""
+      groupInfo$timeOfDay[i] <- if (!is.null(group) && !is.null(group$timeOfDay)) group$timeOfDay else start_time_names[ifelse(i <= length(start_time_names), i, 1)]
+    }
 
     # fillColor
     fillColor <- data.frame(
