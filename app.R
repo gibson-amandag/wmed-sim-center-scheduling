@@ -311,6 +311,8 @@ server <- function(input, output, session) {
       nm <- tmpl_inputs$starttime_names[[key]]
       if (is.null(nm) || nm == "") paste0("Start", i) else nm
     })
+    # Create named vector: values = index, names = label
+    time_of_day_choices <- setNames(as.character(seq_along(start_time_names)), start_time_names)
     isolate({
       tagList(
         lapply(seq_len(n), function(i) {
@@ -320,13 +322,18 @@ server <- function(input, output, session) {
           date_val <- if (!is.null(group) && !is.null(group$date)) group$date else NULL
           startTime_val <- if (!is.null(group) && !is.null(group$startTime)) group$startTime else ""
           endTime_val <- if (!is.null(group) && !is.null(group$endTime)) group$endTime else ""
-          timeOfDay_val <- if (!is.null(group) && !is.null(group$timeOfDay)) group$timeOfDay else start_time_names[ifelse(i <= length(start_time_names), i, 1)]
+          # Default to index as value
+          timeOfDay_val <- if (!is.null(group) && !is.null(group$timeOfDay) && group$timeOfDay %in% as.character(seq_along(start_time_names))) {
+            group$timeOfDay
+          } else {
+            as.character(i)
+          }
           fluidRow(
             column(2, textInput(paste0(prefix, "groupNum"), paste0("Group ", i, " Name"), value = groupNum_val)),
             column(2, dateInput(paste0(prefix, "date"), "Date", value = if (!is.null(date_val)) date_val else NULL)),
             column(2, textInput(paste0(prefix, "startTime"), "Start Time (e.g. 08:00)", value = startTime_val)),
             column(2, textInput(paste0(prefix, "endTime"), "End Time (e.g. 12:00)", value = endTime_val)),
-            column(2, selectInput(paste0(prefix, "timeOfDay"), "Time of Day", choices = start_time_names, selected = timeOfDay_val))
+            column(2, selectInput(paste0(prefix, "timeOfDay"), "Time of Day", choices = time_of_day_choices, selected = timeOfDay_val))
           )
         })
       )
