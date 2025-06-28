@@ -177,6 +177,199 @@ ui <- fluidPage(
 server <- function(input, output, session) {
   data <- reactiveValues()
 
+  # --- NEW: Store template labels/times in reactiveValues ---
+  tmpl_inputs <- reactiveValues(
+    starttime_names = list(),
+    timeblock_times = list()
+  )
+
+  # --- Observe and update start time labels ---
+  observe({
+    req(input$tmpl_num_starttimes)
+    n <- input$tmpl_num_starttimes
+    # Update stored labels if changed
+    isolate({
+      for (i in seq_len(n)) {
+        key <- paste0("tmpl_starttime_name_", i)
+        val <- input[[key]]
+        if (!is.null(val)) tmpl_inputs$starttime_names[[key]] <- val
+      }
+      # Remove any extra labels if n decreased
+      to_remove <- setdiff(names(tmpl_inputs$starttime_names), paste0("tmpl_starttime_name_", seq_len(n)))
+      tmpl_inputs$starttime_names[to_remove] <- NULL
+    })
+  })
+
+  # --- Observe and update time block times ---
+  observe({
+    req(input$tmpl_num_timeblocks, input$tmpl_num_starttimes)
+    n_tb <- input$tmpl_num_timeblocks
+    n_st <- input$tmpl_num_starttimes
+    isolate({
+      for (st_idx in seq_len(n_st)) {
+        for (tb_idx in seq_len(n_tb)) {
+          key <- paste0("tmpl_timeblock_", st_idx, "_", tb_idx)
+          val <- input[[key]]
+          if (!is.null(val)) tmpl_inputs$timeblock_times[[key]] <- val
+        }
+      }
+      # Remove any extra if n_tb or n_st decreased
+      valid_keys <- unlist(lapply(seq_len(n_st), function(st_idx) {
+        paste0("tmpl_timeblock_", st_idx, "_", seq_len(n_tb))
+      }))
+      to_remove <- setdiff(names(tmpl_inputs$timeblock_times), valid_keys)
+      tmpl_inputs$timeblock_times[to_remove] <- NULL
+    })
+  })
+
+  # --- UI for start time names ---
+  output$tmpl_starttime_names_ui <- renderUI({
+    req(input$tmpl_num_starttimes)
+    n <- input$tmpl_num_starttimes
+    isolate({
+      fluidRow(
+        column(12, h4("Start time labels")),
+        lapply(seq_len(n), function(i) {
+          key <- paste0("tmpl_starttime_name_", i)
+          val <- if (!is.null(tmpl_inputs$starttime_names[[key]])) tmpl_inputs$starttime_names[[key]]
+                 else if (i == 1) "AM" else if (i == 2) "PM" else paste0("Start", i)
+          column(6, textInput(key, paste0("Start time label ", i), value = val))
+        })
+      )
+    })
+  })
+
+  # --- UI for time block times for each start time ---
+  output$tmpl_timeblock_times_ui <- renderUI({
+    req(input$tmpl_num_timeblocks, input$tmpl_num_starttimes)
+    n_tb <- input$tmpl_num_timeblocks
+    n_st <- input$tmpl_num_starttimes
+    start_names <- sapply(seq_len(n_st), function(i) {
+      key <- paste0("tmpl_starttime_name_", i)
+      if (!is.null(tmpl_inputs$starttime_names[[key]])) tmpl_inputs$starttime_names[[key]] else if (i == 1) "AM" else if (i == 2) "PM" else paste0("Start", i)
+    })
+    tagList(
+      lapply(seq_len(n_st), function(st_idx) {
+        fluidRow(
+          column(12, h5(paste0("Times for ", ifelse(!is.null(start_names[st_idx]) && start_names[st_idx] != "", start_names[st_idx], paste0("Start ", st_idx))))),
+          lapply(seq_len(n_tb), function(tb_idx) {
+            key <- paste0("tmpl_timeblock_", st_idx, "_", tb_idx)
+            val <- if (!is.null(tmpl_inputs$timeblock_times[[key]])) tmpl_inputs$timeblock_times[[key]] else ""
+            column(3, textInput(
+              key,
+              paste0("Time for Block ", tb_idx),
+              value = val
+            ))
+          })
+        )
+      })
+    )
+  })
+
+  # Helper to load all sheets
+  load_data <- function(file) {
+      list(
+          studentInfo   = read.xlsx(file, sheet = "studentInfo", detectDates = TRUE),
+          groupInfo     = read.xlsx(file, sheet = "groupInfo", detectDates = TRUE),
+          fillColor     = read.xlsx(file, sheet = "fillColor", detectDates = TRUE),
+          timeBlockInfo = read.xlsx(file, sheet = "timeBlockInfo", detectDates = TRUE),
+          schedule      = read.xlsx(file, sheet = "schedule", detectDates = TRUE),
+          faculty       = read.xlsx(file, sheet = "faculty", detectDates = TRUE)
+      )
+  }
+
+  # Generate group schedules
+  generate_group_schedules <- function(data) {
+    schedules <- list()
+
+    faculty_long <- pivot_longer(
+      data$faculty,
+      cols = starts_with("group"),
+      names_to = "groupNum",
+      values_to = "faculty",
+      names_prefix = "group"
+    )
+    # Ensure groupNum is character for join
+    faculty_long$groupNum <- as.character(faculty_long$groupNum)
+
+    for (group in unique(data$studentInfo$groupNum)) {
+      group_students <- data$studentInfo %>% filter(groupNum == group)
+      group_meta     <- data$groupInfo %>% filter(groupNum == group)
+      if (nrow(group_meta) == 0) next
+
+      sched <- data$schedule
+      time_blocks <- grep("^TimeBlock", names(sched), value = TRUE)
+      tb_info <- data$timeBlockInfo
+
+      # --- Assign faculty for this group using faculty_long ---
+      # Join sched with faculty_long by niceName and groupNum
+      sched_with_faculty <- sched %>%
+        left_join(
+          faculty_long %>% filter(groupNum == as.character(group)),
+          by = c("shortKey")
+        ) %>%
+        mutate(
+          faculty = ifelse(!is.na(faculty), faculty, ifelse(!is.null(sched$faculty), sched$faculty, NA))
+        )
+
+      # Wide version: replace studentNum with "studentNum. lastName, firstName"
+      wide_sched <- sched_with_faculty
+      for (tb in time_blocks) {
+        wide_sched[[tb]] <- sapply(wide_sched[[tb]], function(sn) {
+          if (is.na(sn) || sn == "") return("")
+          stu <- group_students[group_students$studentNum == sn, ]
+          if (nrow(stu) > 0) {
+            paste0(stu$studentNum, ". ", stu$lastName, ", ", stu$firstName)
+          } else {
+            as.character(sn)
+          }
+        })
+      }
+
+      # Long version: one row per station/time block (no date/time columns)
+      long_sched <- tidyr::pivot_longer(
+        sched_with_faculty,
+        cols = all_of(time_blocks),
+        names_to = "timeBlock",
+        values_to = "studentNum"
+      ) %>%
+        left_join(group_students, by = "studentNum") %>%
+        left_join(data$fillColor, by = "studentNum") %>%
+        mutate(
+          studentLabel = ifelse(
+            !is.na(lastName),
+            paste0(studentNum, ". ", lastName, ", ", firstName),
+            as.character(studentNum)
+          )
+        )
+
+      # Store group-level info and time block times as separate parameters
+      group_date <- group_meta$date[1]
+      group_startTime <- group_meta$startTime[1]
+      group_endTime <- group_meta$endTime[1]
+      group_timeOfDay <- if ("timeOfDay" %in% names(group_meta)) group_meta$timeOfDay[1] else NA
+
+      # Pick correct time column for this group
+      time_col <- if (!is.na(group_timeOfDay) && grepl("PM", group_timeOfDay, ignore.case = TRUE)) "pmTimes" else "amTimes"
+      timeblock_times <- if (time_col %in% names(tb_info)) {
+        setNames(as.character(tb_info[[time_col]]), tb_info$timeBlock)
+      } else {
+        setNames(rep(NA, length(tb_info$timeBlock)), tb_info$timeBlock)
+      }
+
+      schedules[[paste0("Group_", group)]] <- list(
+        wide = wide_sched,
+        long = long_sched,
+        date = group_date,
+        startTime = group_startTime,
+        endTime = group_endTime,
+        timeOfDay = group_timeOfDay,
+        timeblock_times = timeblock_times
+      )
+    }
+    return(schedules)
+  }
+
   observeEvent(input$file, {
     req(input$file)
     tables <- load_data(input$file$datapath)
@@ -834,42 +1027,6 @@ server <- function(input, output, session) {
     }
   )
 
-  # --- UI for start time names ---
-  output$tmpl_starttime_names_ui <- renderUI({
-    req(input$tmpl_num_starttimes)
-    n <- input$tmpl_num_starttimes
-    isolate({
-      fluidRow(
-        column(12, h4("Start time labels")),
-        lapply(seq_len(n), function(i) {
-          column(6, textInput(paste0("tmpl_starttime_name_", i), paste0("Start time label ", i), value = ifelse(i == 1, "AM", ifelse(i == 2, "PM", paste0("Start", i)))))
-        })
-      )
-    })
-  })
-
-  # --- UI for time block times for each start time ---
-  output$tmpl_timeblock_times_ui <- renderUI({
-    req(input$tmpl_num_timeblocks, input$tmpl_num_starttimes)
-    n_tb <- input$tmpl_num_timeblocks
-    n_st <- input$tmpl_num_starttimes
-    start_names <- sapply(seq_len(n_st), function(i) input[[paste0("tmpl_starttime_name_", i)]])
-    tagList(
-      lapply(seq_len(n_st), function(st_idx) {
-        fluidRow(
-          column(12, h5(paste0("Times for ", ifelse(!is.null(start_names[st_idx]) && start_names[st_idx] != "", start_names[st_idx], paste0("Start ", st_idx))))),
-          lapply(seq_len(n_tb), function(tb_idx) {
-            column(3, textInput(
-              paste0("tmpl_timeblock_", st_idx, "_", tb_idx),
-              paste0("Time for Block", tb_idx),
-              value = ""
-            ))
-          })
-        )
-      })
-    )
-  })
-
   # --- TEMPLATE CREATOR LOGIC ---
   template_data <- reactive({
     req(
@@ -887,16 +1044,18 @@ server <- function(input, output, session) {
     num_starttimes <- input$tmpl_num_starttimes
     num_stations <- input$tmpl_num_stations
 
-    # Get start time names
+    # Get start time names from tmpl_inputs
     start_time_names <- sapply(seq_len(num_starttimes), function(i) {
-      nm <- input[[paste0("tmpl_starttime_name_", i)]]
+      key <- paste0("tmpl_starttime_name_", i)
+      nm <- tmpl_inputs$starttime_names[[key]]
       if (is.null(nm) || nm == "") paste0("Start", i) else nm
     })
 
-    # Get time block times for each start time
+    # Get time block times for each start time from tmpl_inputs
     timeblock_times <- lapply(seq_len(num_starttimes), function(st_idx) {
       sapply(seq_len(num_timeblocks), function(tb_idx) {
-        val <- input[[paste0("tmpl_timeblock_", st_idx, "_", tb_idx)]]
+        key <- paste0("tmpl_timeblock_", st_idx, "_", tb_idx)
+        val <- tmpl_inputs$timeblock_times[[key]]
         if (is.null(val)) "" else val
       })
     })
@@ -998,3 +1157,11 @@ server <- function(input, output, session) {
 }
 
 shinyApp(ui, server)
+
+# Future to-do:
+# - fill color defaults, add color picker. Only up to max in group
+# - update build code for time picker to not look for "amTimes/pmTimes"
+# - don't add faculty to the schedule table
+# - don't add nice name to the faculty table
+# - add ability to enter information about stations within the template creator
+# - add fill colors for stations
