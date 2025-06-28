@@ -120,16 +120,6 @@ ui <- fluidPage(
     ),
     mainPanel(
       tabsetPanel(
-        tabPanel("Generated Schedules", uiOutput("scheduleTabs")),
-        tabPanel("Student Schedule",
-          selectInput("student_select", "Select Student", choices = NULL),
-          uiOutput("student_schedule_table")
-        ),
-        tabPanel("Student Info", tableOutput("studentInfo")),
-        tabPanel("Group Info", tableOutput("groupInfo")),
-        tabPanel("Time Blocks", tableOutput("timeBlockInfo")),
-        tabPanel("Schedule Template", uiOutput("schedule")),
-        # --- NEW TAB ---
         tabPanel("Template Creator",
           fluidRow(
             column(12, h3("Group information")),
@@ -167,7 +157,17 @@ ui <- fluidPage(
             column(6, numericInput("tmpl_num_stations", "# of stations", 6, min = 1))
           ),
           downloadButton("download_template", "Download Blank Template")
-        )
+        ),tabPanel("Generated Schedules", uiOutput("scheduleTabs")),
+        tabPanel("Student Schedule",
+          selectInput("student_select", "Select Student", choices = NULL),
+          uiOutput("student_schedule_table")
+        ),
+        tabPanel("Student Info", tableOutput("studentInfo")),
+        tabPanel("Group Info", tableOutput("groupInfo")),
+        tabPanel("Time Blocks", tableOutput("timeBlockInfo")),
+        tabPanel("Schedule Template", uiOutput("schedule")),
+        # --- NEW TAB ---
+        
       )
     )
   )
@@ -861,7 +861,7 @@ server <- function(input, output, session) {
           lapply(seq_len(n_tb), function(tb_idx) {
             column(3, textInput(
               paste0("tmpl_timeblock_", st_idx, "_", tb_idx),
-              paste0("TimeBlock", tb_idx, " time"),
+              paste0("Time for Block", tb_idx),
               value = ""
             ))
           })
