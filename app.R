@@ -540,6 +540,68 @@ server <- function(input, output, session) {
     tmpl_students(new_df)
   })
 
+  tmpl_station_info <- reactiveValues(stations = list())
+
+  output$tmpl_station_info_ui <- renderUI({
+  req(input$tmpl_num_stations)
+  n <- input$tmpl_num_stations
+  tagList(
+    lapply(seq_len(n), function(i) {
+      prefix <- paste0("tmpl_station_", i, "_")
+      # --- FIX: Ensure station exists ---
+      if (length(tmpl_station_info$stations) < i || is.null(tmpl_station_info$stations[[i]])) {
+        tmpl_station_info$stations[[i]] <<- list()
+      }
+      station <- tmpl_station_info$stations[[i]]
+      short_key_val <- if (!is.null(station$shortKey)) station$shortKey else paste0("S", i)
+      nice_name_val <- if (!is.null(station$niceName)) station$niceName else paste0("Station ", i)
+      time_in_min_val <- if (!is.null(station$timeInMin)) station$timeInMin else ""
+      room1_val <- if (!is.null(station$room1)) station$room1 else ""
+      room2_val <- if (!is.null(station$room2)) station$room2 else ""
+      notes_val <- if (!is.null(station$notes)) station$notes else ""
+      station_color_val <- if (!is.null(station$stationColor)) station$stationColor else "#FFFFFF"
+      tagList(
+        fluidRow(
+          column(width = 3, class = "col-lg-2", textInput(paste0(prefix, "shortKey"), "Short Key", value = short_key_val)),
+          column(width = 6, class = "col-lg-2", textInput(paste0(prefix, "niceName"), "Station Name", value = nice_name_val)),
+          column(width = 3, class = "col-lg-2", numericInput(paste0(prefix, "timeInMin"), "Duration (min)", value = time_in_min_val, min = 0)),
+          column(width = 4, class = "col-lg-2", textInput(paste0(prefix, "room1"), "Main Room", value = room1_val)),
+          column(width = 4, class = "col-lg-2", textInput(paste0(prefix, "room2"), "Additional Room", value = room2_val)),
+          column(width = 4, class = "col-lg-2", colourpicker::colourInput(paste0(prefix, "stationColor"), "Color", value = station_color_val, showColour = "both"))
+        ),
+        fluidRow(
+          column(12, textInput(paste0(prefix, "notes"), "Notes", value = notes_val))
+        ),
+        tags$hr()
+      )
+    })
+  )
+})
+
+  # Save station info reactively
+  observe({
+    req(input$tmpl_num_stations)
+    n <- input$tmpl_num_stations
+    isolate({
+      for (i in seq_len(n)) {
+        prefix <- paste0("tmpl_station_", i, "_")
+        tmpl_station_info$stations[[i]] <- list(
+          shortKey = input[[paste0(prefix, "shortKey")]],
+          niceName = input[[paste0(prefix, "niceName")]],
+          timeInMin = input[[paste0(prefix, "timeInMin")]],
+          room1 = input[[paste0(prefix, "room1")]],
+          room2 = input[[paste0(prefix, "room2")]],
+          notes = input[[paste0(prefix, "notes")]],
+          stationColor = input[[paste0(prefix, "stationColor")]]
+        )
+      }
+      # Remove extras if n decreased
+      if (length(tmpl_station_info$stations) > n) {
+        tmpl_station_info$stations <- tmpl_station_info$stations[seq_len(n)]
+      }
+    })
+  })
+
   # Helper to load all sheets
   load_data <- function(file) {
     list(
@@ -1409,16 +1471,24 @@ server <- function(input, output, session) {
     }
 
     # schedule
-    schedule <- data.frame(
-      niceName = paste0("Station ", seq_len(num_stations)),
-      shortKey = paste0("S", seq_len(num_stations)),
-      room1 = "",
-      room2 = "",
-      faculty = "",
-      notes = "",
-      stationColor = "",
-      stringsAsFactors = FALSE
-    )
+    schedule <- {
+      n <- input$tmpl_num_stations
+      stations <- tmpl_station_info$stations
+      if (length(stations) != n) {
+        data.frame(
+          shortKey = paste0("S", seq_len(n)),
+          niceName = paste0("Station ", seq_len(n)),
+          timeInMin = "",
+          room1 = "",
+          room2 = "",
+          notes = "",
+          stationColor = "",
+          stringsAsFactors = FALSE
+        )
+      } else {
+        as.data.frame(do.call(rbind, lapply(stations, as.data.frame)), stringsAsFactors = FALSE)
+      }
+    }
     for (i in seq_len(num_timeblocks)) {
       schedule[[paste0("TimeBlock", i)]] <- ""
     }
