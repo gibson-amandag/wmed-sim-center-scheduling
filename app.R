@@ -4,6 +4,7 @@ library(dplyr)
 library(tidyr)
 library(openxlsx)
 library(zip)
+library(colourpicker)
 
 # Helper to load all sheets
 load_data <- function(file) {
@@ -141,6 +142,7 @@ ui <- fluidPage(
             column(6, p("What is the maximum number of students per group?")),
             column(6, numericInput("tmpl_max_students", "Max # of students/group", 6, min = 1))
           ),
+          uiOutput("tmpl_student_colors_ui"),
           fluidRow(
             column(12, h3("Total number of students")),
             column(6, p("What is the total number of students across all groups?")),
@@ -349,6 +351,37 @@ server <- function(input, output, session) {
         })
       )
     })
+  })
+
+  # --- UI for student color pickers ---
+  output$tmpl_student_colors_ui <- renderUI({
+    req(input$tmpl_max_students)
+    n <- input$tmpl_max_students
+    # Default colors (repeat if needed)
+    default_colors <- c(
+      "#FF7C80", "#FFA365", "#FFFF00", "#AEFF5D", "#A6A200", "#97CBFF",
+      "#9797FF", "#FAB3FF", "#CC66FF", "#D4D2D2", "#FFE285", "#B3773B",
+      "#85FFDF", "#25C6FF", "#6B9572", "#FF8FDA", "#93AA00", "#593315",
+      "#F13A13", "#232C16"
+    )
+    tagList(
+      fluidRow(
+        column(12, h4("Student Colors (for fillColor sheet)"))
+      ),
+      fluidRow(
+        lapply(seq_len(n), function(i) {
+          key <- paste0("tmpl_student_color_", i)
+          val <- input[[key]]
+          default_val <- if (!is.null(val)) val else default_colors[(i - 1) %% length(default_colors) + 1]
+          column(4, 
+        tags$div(
+          paste("Student", i),
+          colourpicker::colourInput(key, NULL, value = default_val, showColour = "both")
+        )
+          )
+        })
+      )
+    )
   })
 
   # Helper to load all sheets
