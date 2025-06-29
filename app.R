@@ -1284,9 +1284,10 @@ server <- function(input, output, session) {
 shinyApp(ui, server)
 
 # Future to-do:
-# - fill color defaults, add color picker. Only up to max in group
+# - fill color only up to max in group
 # - update build code for time picker to not look for "amTimes/pmTimes"
 # - don't add faculty to the schedule table
 # - don't add nice name to the faculty table
 # - add ability to enter information about stations within the template creator
 # - add fill colors for stations
+# - add option for faculty by room for faculty by student
