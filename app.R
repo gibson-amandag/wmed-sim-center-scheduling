@@ -29,12 +29,14 @@ generate_group_schedules <- function(data) {
     values_to = "faculty",
     names_prefix = "group"
   )
+
   # Ensure groupNum is character for join
   faculty_long$groupNum <- as.character(faculty_long$groupNum)
 
   for (group in unique(data$studentInfo$groupNum)) {
     group_students <- data$studentInfo %>% filter(groupNum == group)
     group_meta <- data$groupInfo %>% filter(groupNum == group)
+    # print(paste("Generating schedule for group", group, "with", nrow(group_meta), "students."))
     if (nrow(group_meta) == 0) next
 
     sched <- data$schedule
@@ -69,6 +71,15 @@ generate_group_schedules <- function(data) {
     }
 
     # Long version: one row per station/time block (no date/time columns)
+    # print("Group_students:")
+    # print(group_students)
+    # print("Long schedule with faculty:")
+    # print(pivot_longer(
+    #   sched_with_faculty,
+    #   cols = all_of(time_blocks),
+    #   names_to = "timeBlock",
+    #   values_to = "studentNum"
+    # ))
     long_sched <- tidyr::pivot_longer(
       sched_with_faculty,
       cols = all_of(time_blocks),
@@ -613,112 +624,6 @@ server <- function(input, output, session) {
     update_tmpl_station_info()
   })
 
-  # Helper to load all sheets
-  load_data <- function(file) {
-    list(
-      studentInfo   = read.xlsx(file, sheet = "studentInfo", detectDates = TRUE),
-      groupInfo     = read.xlsx(file, sheet = "groupInfo", detectDates = TRUE),
-      fillColor     = read.xlsx(file, sheet = "fillColor", detectDates = TRUE),
-      timeBlockInfo = read.xlsx(file, sheet = "timeBlockInfo", detectDates = TRUE),
-      schedule      = read.xlsx(file, sheet = "schedule", detectDates = TRUE),
-      faculty       = read.xlsx(file, sheet = "faculty", detectDates = TRUE)
-    )
-  }
-
-  # Generate group schedules
-  generate_group_schedules <- function(data) {
-    schedules <- list()
-
-    faculty_long <- pivot_longer(
-      data$faculty,
-      cols = starts_with("group"),
-      names_to = "groupNum",
-      values_to = "faculty",
-      names_prefix = "group"
-    )
-    # Ensure groupNum is character for join
-    faculty_long$groupNum <- as.character(faculty_long$groupNum)
-
-    for (group in unique(data$studentInfo$groupNum)) {
-      group_students <- data$studentInfo %>% filter(groupNum == group)
-      group_meta <- data$groupInfo %>% filter(groupNum == group)
-      if (nrow(group_meta) == 0) next
-
-      sched <- data$schedule
-      time_blocks <- grep("^TimeBlock", names(sched), value = TRUE)
-      tb_info <- data$timeBlockInfo
-
-      # --- Assign faculty for this group using faculty_long ---
-      # Join sched with faculty_long by niceName and groupNum
-      sched_with_faculty <- sched %>%
-        left_join(
-          faculty_long %>% filter(groupNum == as.character(group)),
-          by = c("shortKey")
-        ) %>%
-        mutate(
-          faculty = ifelse(!is.na(faculty), faculty, ifelse(!is.null(sched$faculty), sched$faculty, NA))
-        )
-
-      # Wide version: replace studentNum with "studentNum. lastName, firstName"
-      wide_sched <- sched_with_faculty
-      for (tb in time_blocks) {
-        wide_sched[[tb]] <- sapply(wide_sched[[tb]], function(sn) {
-          if (is.na(sn) || sn == "") {
-            return("")
-          }
-          stu <- group_students[group_students$studentNum == sn, ]
-          if (nrow(stu) > 0) {
-            paste0(stu$studentNum, ". ", stu$lastName, ", ", stu$firstName)
-          } else {
-            as.character(sn)
-          }
-        })
-      }
-
-      # Long version: one row per station/time block (no date/time columns)
-      long_sched <- tidyr::pivot_longer(
-        sched_with_faculty,
-        cols = all_of(time_blocks),
-        names_to = "timeBlock",
-        values_to = "studentNum"
-      ) %>%
-        left_join(group_students, by = "studentNum") %>%
-        left_join(data$fillColor, by = "studentNum") %>%
-        mutate(
-          studentLabel = ifelse(
-            !is.na(lastName),
-            paste0(studentNum, ". ", lastName, ", ", firstName),
-            as.character(studentNum)
-          )
-        )
-
-      # Store group-level info and time block times as separate parameters
-      group_date <- group_meta$date[1]
-      group_startTime <- group_meta$startTime[1]
-      group_endTime <- group_meta$endTime[1]
-      group_timeOfDay <- if ("timeOfDay" %in% names(group_meta)) group_meta$timeOfDay[1] else NA
-
-      # Pick correct time column for this group
-      time_col <- if (!is.na(group_timeOfDay) && grepl("PM", group_timeOfDay, ignore.case = TRUE)) "pmTimes" else "amTimes"
-      timeblock_times <- if (time_col %in% names(tb_info)) {
-        setNames(as.character(tb_info[[time_col]]), tb_info$timeBlock)
-      } else {
-        setNames(rep(NA, length(tb_info$timeBlock)), tb_info$timeBlock)
-      }
-
-      schedules[[paste0("Group_", group)]] <- list(
-        wide = wide_sched,
-        long = long_sched,
-        date = group_date,
-        startTime = group_startTime,
-        endTime = group_endTime,
-        timeOfDay = group_timeOfDay,
-        timeblock_times = timeblock_times
-      )
-    }
-    return(schedules)
-  }
-
   observeEvent(input$file, {
     req(input$file)
     tables <- load_data(input$file$datapath)
@@ -749,8 +654,10 @@ server <- function(input, output, session) {
       df <- df %>%
         mutate(
           date = format(as.Date(date)),
-          startTime = format(as_hms(startTime * 86400)),
-          endTime = format(as_hms(endTime * 86400))
+          # startTime = format(as_hms(startTime * 86400)),
+          # endTime = format(as_hms(endTime * 86400))
+          startTime = format(as.character(startTime)),
+          endTime = format(as.character(endTime))
         )
       df
     },
@@ -1461,7 +1368,6 @@ server <- function(input, output, session) {
       )
       for (i in seq_len(num_groups)) {
         group <- tmpl_group_info$groups[[i]]
-        print(str(group))
         groupInfo$groupNum[i] <- if (!is.null(group) && !is.null(group$groupNum)) group$groupNum else paste0("Group ", i)
         groupInfo$date[i] <- if (!is.null(group) && !is.null(group$date)) group$date else ""
         groupInfo$startTime[i] <- if (!is.null(group) && !is.null(group$startTime)) group$startTime else ""
