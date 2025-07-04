@@ -5,7 +5,7 @@ library(tidyr)
 library(openxlsx)
 library(zip)
 library(colourpicker)
-
+library(shinyTime)
 # Helper to load all sheets
 load_data <- function(file) {
   list(
@@ -98,16 +98,22 @@ generate_group_schedules <- function(data) {
 
     # Store group-level info and time block times as separate parameters
     group_date <- group_meta$date[1]
-    group_startTime <- group_meta$startTime[1]
-    group_endTime <- group_meta$endTime[1]
     group_timeOfDay <- if ("timeOfDay" %in% names(group_meta)) group_meta$timeOfDay[1] else NA
 
-    # Pick correct time column for this group
-    time_col <- if (!is.na(group_timeOfDay) && grepl("PM", group_timeOfDay, ignore.case = TRUE)) "pmTimes" else "amTimes"
-    timeblock_times <- if (time_col %in% names(tb_info)) {
-      setNames(as.character(tb_info[[time_col]]), tb_info$timeBlock)
+    # Find the start time label for this group
+    start_time_label <- group_timeOfDay
+    if (!is.na(start_time_label) && start_time_label %in% names(tb_info)) {
+      # Get time block times for this start time
+      timeblock_times <- setNames(as.character(tb_info[[start_time_label]]), tb_info$timeBlock)
+      # Get arrival/end time from special rows in timeBlockInfo
+      arrival_row <- which(tb_info$timeBlock == "Participant arrival time")
+      end_row <- which(tb_info$timeBlock == "Participant end time")
+      group_startTime <- if (length(arrival_row) == 1) tb_info[[start_time_label]][arrival_row] else NA
+      group_endTime <- if (length(end_row) == 1) tb_info[[start_time_label]][end_row] else NA
     } else {
-      setNames(rep(NA, length(tb_info$timeBlock)), tb_info$timeBlock)
+      timeblock_times <- setNames(rep(NA, length(tb_info$timeBlock)), tb_info$timeBlock)
+      group_startTime <- NA
+      group_endTime <- NA
     }
 
     schedules[[paste0("Group_", group)]] <- list(
@@ -146,11 +152,29 @@ ui <- fluidPage(
         tabPanel(
           "Template Creator",
           fluidRow(
+            column(12, h3("Start time information")),
+            column(
+              6, p("How many start times are there in the schedule?"),
+              em("You might have different start times for different groups, e.g. AM/PM")
+            ),
+            column(6, numericInput("tmpl_num_starttimes", "# of start times", 2, min = 1))
+          ),
+          uiOutput("tmpl_starttime_names_ui"),
+          fluidRow(
+            column(12, h3("Time block information")),
+            column(
+              6,
+              p("How many time blocks are there in the schedule?"),
+              em("This is the number of time slots for each station, and it can include breaks")
+            ),
+            column(6, numericInput("tmpl_num_timeblocks", "# of time blocks", 6, min = 1))
+          ),
+          uiOutput("tmpl_timeblock_times_ui"),
+          fluidRow(
             column(12, h3("Group information")),
             column(6, p("How many groups of students are you scheduling?")),
             column(6, numericInput("tmpl_num_groups", "# of groups", 2, min = 1))
           ),
-          # --- NEW: Group info entry UI ---
           uiOutput("tmpl_group_info_ui"),
           fluidRow(
             column(6, p("What is the maximum number of students per group?")),
@@ -175,7 +199,8 @@ ui <- fluidPage(
             column(6, actionButton("tmpl_fix_group_student_num_btn", "(Re)calculate group/student numbers"))
           ),
           fluidRow(
-            column(12,
+            column(
+              12,
               actionButton("show_student_table", "Show/Hide Student Table", style = "background-color: #33619E; color: white;"),
               conditionalPanel(
                 condition = "input.show_student_table % 2 == 1",
@@ -183,25 +208,6 @@ ui <- fluidPage(
               )
             )
           ),
-          fluidRow(
-            column(12, h3("Start time information")),
-            column(
-              6, p("How many start times are there in the schedule?"),
-              em("You might have different start times for different groups, e.g. AM/PM")
-            ),
-            column(6, numericInput("tmpl_num_starttimes", "# of startTimes", 2, min = 1))
-          ),
-          uiOutput("tmpl_starttime_names_ui"),
-          fluidRow(
-            column(12, h3("Time block information")),
-            column(
-              6,
-              p("How many time blocks are there in the schedule?"),
-              em("This is the number of time slots for each station, and it can include breaks")
-            ),
-            column(6, numericInput("tmpl_num_timeblocks", "# of time blocks", 6, min = 1))
-          ),
-          uiOutput("tmpl_timeblock_times_ui"),
           fluidRow(
             column(12, h3("Station information")),
             column(6, p("How many stations are there in the schedule?")),
@@ -232,7 +238,9 @@ server <- function(input, output, session) {
   # --- NEW: Store template labels/times in reactiveValues ---
   tmpl_inputs <- reactiveValues(
     starttime_names = list(),
-    timeblock_times = list()
+    timeblock_times = list(),
+    arrival_times = list(),
+    end_times = list()
   )
 
   # --- NEW: Store group info in reactiveValues ---
@@ -242,16 +250,28 @@ server <- function(input, output, session) {
   update_tmpl_starttime_names <- function() {
     req(input$tmpl_num_starttimes)
     n <- input$tmpl_num_starttimes
-    isolate({
-      for (i in seq_len(n)) {
-        key <- paste0("tmpl_starttime_name_", i)
-        val <- input[[key]]
-        if (!is.null(val)) tmpl_inputs$starttime_names[[key]] <- val
-      }
-      # Remove any extra labels if n decreased
-      to_remove <- setdiff(names(tmpl_inputs$starttime_names), paste0("tmpl_starttime_name_", seq_len(n)))
-      tmpl_inputs$starttime_names[to_remove] <- NULL
-    })
+    for (i in seq_len(n)) {
+      key <- paste0("tmpl_starttime_name_", i)
+      val <- input[[key]]
+      if (!is.null(val)) tmpl_inputs$starttime_names[[key]] <- val
+
+      # Also store arrival and end times for each start time
+      arrival_key <- paste0("tmpl_arrival_", i)
+      end_key <- paste0("tmpl_end_", i)
+      arrival <- input[[arrival_key]]
+      end <- input[[end_key]]
+      if (!is.null(arrival)) tmpl_inputs$arrival_times[[arrival_key]] <- arrival
+      if (!is.null(end)) tmpl_inputs$end_times[[end_key]] <- end
+    }
+    # Remove any extra labels if n decreased
+    to_remove <- setdiff(names(tmpl_inputs$starttime_names), paste0("tmpl_starttime_name_", seq_len(n)))
+    tmpl_inputs$starttime_names[to_remove] <- NULL
+
+    # Remove any extra arrival and end times if n decreased
+    arrival_to_remove <- setdiff(names(tmpl_inputs$arrival_times), paste0("tmpl_arrival_", seq_len(n)))
+    tmpl_inputs$arrival_times[arrival_to_remove] <- NULL
+    end_to_remove <- setdiff(names(tmpl_inputs$end_times), paste0("tmpl_end_", seq_len(n)))
+    tmpl_inputs$end_times[end_to_remove] <- NULL
   }
   observe({
     update_tmpl_starttime_names()
@@ -317,13 +337,24 @@ server <- function(input, output, session) {
     n <- input$tmpl_num_starttimes
     isolate({
       fluidRow(
-        column(12, h4("Start time labels")),
+        column(12, helpText("Enter times as hh:mm (24-hour format, e.g. 07:30 and 17:15)")),
         lapply(seq_len(n), function(i) {
           key <- paste0("tmpl_starttime_name_", i)
           val <- if (!is.null(tmpl_inputs$starttime_names[[key]])) {
             tmpl_inputs$starttime_names[[key]]
           } else if (i == 1) "AM" else if (i == 2) "PM" else paste0("Start", i)
-          column(6, textInput(key, paste0("Start time label ", i), value = val))
+          # Set default arrival/end times based on index
+          default_arrival <- if (i == 1) strptime("07:30", "%H:%M") else if (i == 2) strptime("12:30", "%H:%M") else strptime("08:00", "%H:%M")
+          default_end <- if (i == 1) strptime("12:15", "%H:%M") else if (i == 2) strptime("17:15", "%H:%M") else strptime("12:00", "%H:%M")
+          tagList(
+            column(4, textInput(key, paste0("Start time label ", i), value = val)),
+            column(4, 
+              timeInput(paste0("tmpl_arrival_", i), "Participant arrival time", value = default_arrival, seconds = FALSE)
+            ),
+            column(4, 
+              timeInput(paste0("tmpl_end_", i), "Participant end time", value = default_end, seconds = FALSE)
+            )
+          )
         })
       )
     })
@@ -387,11 +418,9 @@ server <- function(input, output, session) {
           #   str(get_start_time_label(timeOfDay_val, start_time_names))
           # )
           fluidRow(
-            column(2, textInput(paste0(prefix, "groupNum"), paste0("Group ", i, " Name"), value = groupNum_val)),
-            column(2, dateInput(paste0(prefix, "date"), "Date", value = if (!is.null(date_val)) date_val else NULL)),
-            column(2, textInput(paste0(prefix, "startTime"), "Start Time (e.g. 08:00)", value = startTime_val)),
-            column(2, textInput(paste0(prefix, "endTime"), "End Time (e.g. 12:00)", value = endTime_val)),
-            column(2, selectInput(paste0(prefix, "timeOfDay"), "Time of Day", choices = time_of_day_choices, selected = timeOfDay_val))
+            column(4, textInput(paste0(prefix, "groupNum"), paste0("Group ", i, " Name"), value = groupNum_val)),
+            column(4, dateInput(paste0(prefix, "date"), "Date", value = if (!is.null(date_val)) date_val else NULL)),
+            column(4, selectInput(paste0(prefix, "timeOfDay"), "Time of Day", choices = time_of_day_choices, selected = timeOfDay_val))
           )
         })
       )
@@ -440,14 +469,14 @@ server <- function(input, output, session) {
         style = "color: #b30000; font-weight: bold; margin-bottom: 10px;",
         paste(
           "Warning: The total number of students (", input$tmpl_total_students,
-          ") exceeds the maximum allowed (", max_allowed, 
+          ") exceeds the maximum allowed (", max_allowed,
           ") for", input$tmpl_num_groups, "groups ×", input$tmpl_max_students, "students per group."
         )
       )
     }
   })
 
-    # Initialize student table when total students or groups change
+  # Initialize student table when total students or groups change
   observeEvent(
     {
       input$tmpl_total_students
@@ -458,11 +487,11 @@ server <- function(input, output, session) {
       req(input$tmpl_total_students, input$tmpl_num_groups, input$tmpl_max_students)
       n <- input$tmpl_total_students
       max_per_group <- input$tmpl_max_students
-  
+
       # Generate new groupNum and studentNum vectors
       groupNum <- rep(seq_len(ceiling(n / max_per_group)), each = max_per_group, length.out = n)
       studentNum <- rep(seq_len(max_per_group), times = ceiling(n / max_per_group), length.out = n)
-  
+
       # Get existing data if present
       old_df <- tmpl_students()
       new_df <- data.frame(
@@ -472,13 +501,13 @@ server <- function(input, output, session) {
         studentNum = studentNum,
         stringsAsFactors = FALSE
       )
-  
+
       # If old data exists, copy over matching rows
       if (!is.null(old_df)) {
         min_rows <- min(nrow(old_df), nrow(new_df))
         new_df[seq_len(min_rows), c("lastName", "firstName", "groupNum", "studentNum")] <- old_df[seq_len(min_rows), c("lastName", "firstName", "groupNum", "studentNum")]
       }
-  
+
       tmpl_students(new_df)
     },
     # ignoreInit = TRUE
@@ -515,7 +544,7 @@ server <- function(input, output, session) {
     ))
   })
 
-    observeEvent(input$tmpl_paste_apply, {
+  observeEvent(input$tmpl_paste_apply, {
     req(input$tmpl_paste_text)
     lines <- strsplit(input$tmpl_paste_text, "\n")[[1]]
     parsed <- do.call(rbind, lapply(lines, function(line) {
@@ -529,7 +558,7 @@ server <- function(input, output, session) {
     names(df) <- c("lastName", "firstName", "groupNum")
     df$studentNum <- seq_len(nrow(df))
     df <- df[, c("lastName", "firstName", "groupNum", "studentNum")]
-    updateNumericInput(session, "tmpl_total_students", value = nrow(df))  # <-- Add this line
+    updateNumericInput(session, "tmpl_total_students", value = nrow(df)) # <-- Add this line
     tmpl_students(df)
     removeModal()
   })
@@ -538,10 +567,10 @@ server <- function(input, output, session) {
     req(input$tmpl_total_students, input$tmpl_max_students)
     n <- input$tmpl_total_students
     max_per_group <- input$tmpl_max_students
-  
+
     groupNum <- rep(seq_len(ceiling(n / max_per_group)), each = max_per_group, length.out = n)
     studentNum <- rep(seq_len(max_per_group), times = ceiling(n / max_per_group), length.out = n)
-  
+
     old_df <- tmpl_students()
     new_df <- data.frame(
       lastName = "",
@@ -653,11 +682,7 @@ server <- function(input, output, session) {
       df <- data$groupInfo
       df <- df %>%
         mutate(
-          date = format(as.Date(date)),
-          # startTime = format(as_hms(startTime * 86400)),
-          # endTime = format(as_hms(endTime * 86400))
-          startTime = format(as.character(startTime)),
-          endTime = format(as.character(endTime))
+          date = format(as.Date(date))
         )
       df
     },
@@ -1304,143 +1329,152 @@ server <- function(input, output, session) {
   )
 
   # --- TEMPLATE CREATOR LOGIC ---
-    template_data <- reactive({
-      req(
-        input$tmpl_num_groups,
-        input$tmpl_max_students,
-        input$tmpl_total_students,
-        input$tmpl_num_timeblocks,
-        input$tmpl_num_starttimes,
-        input$tmpl_num_stations
-      )
-      update_tmpl_group_info()
-      update_tmpl_starttime_names()
-      update_tmpl_station_info()
+  template_data <- reactive({
+    req(
+      input$tmpl_num_groups,
+      input$tmpl_max_students,
+      input$tmpl_total_students,
+      input$tmpl_num_timeblocks,
+      input$tmpl_num_starttimes,
+      input$tmpl_num_stations
+    )
+    update_tmpl_group_info()
+    update_tmpl_starttime_names()
+    update_tmpl_station_info()
 
-      num_groups <- input$tmpl_num_groups
-      max_students <- input$tmpl_max_students
-      total_students <- input$tmpl_total_students
-      num_timeblocks <- input$tmpl_num_timeblocks
-      num_starttimes <- input$tmpl_num_starttimes
-      num_stations <- input$tmpl_num_stations
-  
-      # Get start time names from tmpl_inputs
-      start_time_names <- sapply(seq_len(num_starttimes), function(i) {
-        key <- paste0("tmpl_starttime_name_", i)
-        nm <- tmpl_inputs$starttime_names[[key]]
-        if (is.null(nm) || nm == "") paste0("Start", i) else nm
-      })
-  
-      # Get time block times for each start time from tmpl_inputs
-      timeblock_times <- lapply(seq_len(num_starttimes), function(st_idx) {
-        sapply(seq_len(num_timeblocks), function(tb_idx) {
-          key <- paste0("tmpl_timeblock_", st_idx, "_", tb_idx)
-          val <- tmpl_inputs$timeblock_times[[key]]
-          if (is.null(val)) "" else val
-        })
-      })
-      names(timeblock_times) <- start_time_names
-  
-      # studentInfo
-      studentInfo <- {
-        df <- tmpl_students()
-        if (is.null(df)) {
-          data.frame(
-            lastName = "",
-            firstName = "",
-            groupNum = rep(seq_len(num_groups), each = max_students, length.out = total_students),
-            studentNum = seq_len(total_students),
-            stringsAsFactors = FALSE
-          )
-        } else {
-          df[, c("lastName", "firstName", "groupNum", "studentNum")]
-        }
-      }
-  
-      # groupInfo from tmpl_group_info
-      groupInfo <- data.frame(
-        groupNum = character(num_groups),
-        date = as.Date(rep(NA, num_groups)),
-        startTime = character(num_groups),
-        endTime = character(num_groups),
-        timeOfDay = character(num_groups),
-        stringsAsFactors = FALSE
-      )
-      for (i in seq_len(num_groups)) {
-        group <- tmpl_group_info$groups[[i]]
-        groupInfo$groupNum[i] <- if (!is.null(group) && !is.null(group$groupNum)) group$groupNum else paste0("Group ", i)
-        groupInfo$date[i] <- if (!is.null(group) && !is.null(group$date)) group$date else ""
-        groupInfo$startTime[i] <- if (!is.null(group) && !is.null(group$startTime)) group$startTime else ""
-        groupInfo$endTime[i] <- if (!is.null(group) && !is.null(group$endTime)) group$endTime else ""
-        groupInfo$timeOfDay[i] <- if (!is.null(group) && !is.null(group$timeOfDay)) {
-          get_start_time_label(group$timeOfDay, start_time_names)
-        } else {
-          get_start_time_label(i, start_time_names)
-        }
-      }
-  
-      # fillColor: use actual color pickers, only up to max students
-      fillColor <- data.frame(
-        studentNum = seq_len(max_students),
-        code = sapply(seq_len(max_students), function(i) {
-          key <- paste0("tmpl_student_color_", i)
-          val <- input[[key]]
-          if (is.null(val) || val == "") "#FFFFFF" else val
-        }),
-        stringsAsFactors = FALSE
-      )
-  
-      # timeBlockInfo: one column per start time, values from UI
-      timeBlockInfo <- data.frame(
-        timeBlock = paste0("TimeBlock", seq_len(num_timeblocks)),
-        stringsAsFactors = FALSE
-      )
-      for (i in seq_along(start_time_names)) {
-        timeBlockInfo[[start_time_names[i]]] <- timeblock_times[[i]]
-      }
-  
-      # schedule: use actual station info from UI
-      schedule <- {
-        n <- input$tmpl_num_stations
-        stations <- tmpl_station_info$stations
-        if (length(stations) != n) {
-          data.frame(
-            shortKey = paste0("S", seq_len(n)),
-            niceName = paste0("Station ", seq_len(n)),
-            timeInMin = "",
-            room1 = "",
-            room2 = "",
-            notes = "",
-            stationColor = "",
-            stringsAsFactors = FALSE
-          )
-        } else {
-          as.data.frame(do.call(rbind, lapply(stations, as.data.frame)), stringsAsFactors = FALSE)
-        }
-      }
-      for (i in seq_len(num_timeblocks)) {
-        schedule[[paste0("TimeBlock", i)]] <- ""
-      }
-  
-      # faculty: one row per station, one column per group, use station names/keys
-      faculty <- data.frame(
-        niceName = schedule$niceName,
-        shortKey = schedule$shortKey,
-        stringsAsFactors = FALSE
-      )
-      for (g in seq_len(num_groups)) {
-        faculty[[paste0("group", g)]] <- ""
-      }
-  
-      list(
-        studentInfo = studentInfo,
-        groupInfo = groupInfo,
-        fillColor = fillColor,
-        timeBlockInfo = timeBlockInfo,
-        schedule = schedule,
-        faculty = faculty
-      )
+    num_groups <- input$tmpl_num_groups
+    max_students <- input$tmpl_max_students
+    total_students <- input$tmpl_total_students
+    num_timeblocks <- input$tmpl_num_timeblocks
+    num_starttimes <- input$tmpl_num_starttimes
+    num_stations <- input$tmpl_num_stations
+
+    # Get start time names from tmpl_inputs
+    start_time_names <- sapply(seq_len(num_starttimes), function(i) {
+      key <- paste0("tmpl_starttime_name_", i)
+      nm <- tmpl_inputs$starttime_names[[key]]
+      if (is.null(nm) || nm == "") paste0("Start", i) else nm
     })
+
+    # Get time block times for each start time from tmpl_inputs
+    timeblock_times <- lapply(seq_len(num_starttimes), function(st_idx) {
+      sapply(seq_len(num_timeblocks), function(tb_idx) {
+        key <- paste0("tmpl_timeblock_", st_idx, "_", tb_idx)
+        val <- tmpl_inputs$timeblock_times[[key]]
+        if (is.null(val)) "" else val
+      })
+    })
+    names(timeblock_times) <- start_time_names
+
+    # studentInfo
+    studentInfo <- {
+      df <- tmpl_students()
+      if (is.null(df)) {
+        data.frame(
+          lastName = "",
+          firstName = "",
+          groupNum = rep(seq_len(num_groups), each = max_students, length.out = total_students),
+          studentNum = seq_len(total_students),
+          stringsAsFactors = FALSE
+        )
+      } else {
+        df[, c("lastName", "firstName", "groupNum", "studentNum")]
+      }
+    }
+
+    # groupInfo from tmpl_group_info
+    groupInfo <- data.frame(
+      groupNum = character(num_groups),
+      date = as.Date(rep(NA, num_groups)),
+      timeOfDay = character(num_groups),
+      stringsAsFactors = FALSE
+    )
+    for (i in seq_len(num_groups)) {
+      group <- tmpl_group_info$groups[[i]]
+      groupInfo$groupNum[i] <- if (!is.null(group) && !is.null(group$groupNum)) group$groupNum else paste0("Group ", i)
+      groupInfo$date[i] <- if (!is.null(group) && !is.null(group$date)) group$date else ""
+      groupInfo$timeOfDay[i] <- if (!is.null(group) && !is.null(group$timeOfDay)) {
+        get_start_time_label(group$timeOfDay, start_time_names)
+      } else {
+        get_start_time_label(i, start_time_names)
+      }
+    }
+
+    # fillColor: use actual color pickers, only up to max students
+    fillColor <- data.frame(
+      studentNum = seq_len(max_students),
+      code = sapply(seq_len(max_students), function(i) {
+        key <- paste0("tmpl_student_color_", i)
+        val <- input[[key]]
+        if (is.null(val) || val == "") "#FFFFFF" else val
+      }),
+      stringsAsFactors = FALSE
+    )
+
+    # timeBlockInfo: one column per start time, values from UI
+    timeBlockInfo <- data.frame(
+      timeBlock = paste0("TimeBlock", seq_len(num_timeblocks)),
+      stringsAsFactors = FALSE
+    )
+    arrival_times <- character(num_starttimes)
+    end_times <- character(num_starttimes)
+    for (i in seq_along(start_time_names)) {
+      timeBlockInfo[[start_time_names[i]]] <- timeblock_times[[i]]
+      arrival_key <- paste0("tmpl_arrival_", i)
+      end_key <- paste0("tmpl_end_", i)
+      arrival_times[i] <- input[[arrival_key]]
+      end_times[i] <- input[[end_key]]
+    }
+    # Add arrival and end time as separate rows (or columns, see next step)
+    timeBlockInfo <- rbind(
+      data.frame(timeBlock = "Participant arrival time", t(arrival_times), stringsAsFactors = FALSE),
+      data.frame(timeBlock = "Participant end time", t(end_times), stringsAsFactors = FALSE),
+      timeBlockInfo
+    )
+    names(timeBlockInfo)[-1] <- start_time_names
+
+    # schedule: use actual station info from UI
+    schedule <- {
+      n <- input$tmpl_num_stations
+      stations <- tmpl_station_info$stations
+      if (length(stations) != n) {
+        data.frame(
+          shortKey = paste0("S", seq_len(n)),
+          niceName = paste0("Station ", seq_len(n)),
+          timeInMin = "",
+          room1 = "",
+          room2 = "",
+          notes = "",
+          stationColor = "",
+          stringsAsFactors = FALSE
+        )
+      } else {
+        as.data.frame(do.call(rbind, lapply(stations, as.data.frame)), stringsAsFactors = FALSE)
+      }
+    }
+    for (i in seq_len(num_timeblocks)) {
+      schedule[[paste0("TimeBlock", i)]] <- ""
+    }
+
+    # faculty: one row per station, one column per group, use station names/keys
+    faculty <- data.frame(
+      niceName = schedule$niceName,
+      shortKey = schedule$shortKey,
+      stringsAsFactors = FALSE
+    )
+    for (g in seq_len(num_groups)) {
+      faculty[[paste0("group", g)]] <- ""
+    }
+
+    list(
+      studentInfo = studentInfo,
+      groupInfo = groupInfo,
+      fillColor = fillColor,
+      timeBlockInfo = timeBlockInfo,
+      schedule = schedule,
+      faculty = faculty
+    )
+  })
 
   output$download_template <- downloadHandler(
     filename = function() {
@@ -1463,7 +1497,7 @@ server <- function(input, output, session) {
             wb, "fillColor",
             createStyle(fgFill = color),
             rows = i + 1, # +1 for header row
-            cols = 2,     # 'code' column is column 2
+            cols = 2, # 'code' column is column 2
             gridExpand = TRUE,
             stack = TRUE
           )
