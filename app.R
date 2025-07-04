@@ -139,20 +139,26 @@ get_start_time_label <- function(index, start_time_names) {
 }
 
 # UI
-ui <- fluidPage(
-  titlePanel("Schedule Generator"),
-  sidebarLayout(
-    sidebarPanel(
-      fileInput("file", "Upload Excel File", accept = ".xlsx"),
-      downloadButton("download", "Download Schedules"),
-      downloadButton("download_students", "Download Student Schedules")
-    ),
-    mainPanel(
+ui <- navbarPage(
+  title = "Schedule Generator",
+  tabPanel(
+    "Enter Info",
+    fluidPage(
+      fluidRow(
+        column(
+          12,
+          helpText(
+            "Fill out the information below about your event (start times, groups, students, stations, etc.),",
+            "then click the 'Download Template File' button to generate an Excel template for your schedule."
+          ),
+          downloadButton("download_template", "Download Template File"),
+        ),
+      ),
       tabsetPanel(
         tabPanel(
-          "Template Creator",
+          "Time and Station Information",
           fluidRow(
-            column(12, h3("Start time information")),
+            column(12, h3("Start Time Information")),
             column(
               6, p("How many start times are there in the schedule?"),
               em("You might have different start times for different groups, e.g. AM/PM")
@@ -171,6 +177,15 @@ ui <- fluidPage(
           ),
           uiOutput("tmpl_timeblock_times_ui"),
           fluidRow(
+            column(12, h3("Station information")),
+            column(6, p("How many stations are there in the schedule?")),
+            column(6, numericInput("tmpl_num_stations", "# of stations", 6, min = 1))
+          ),
+          uiOutput("tmpl_station_info_ui")
+        ),
+        tabPanel(
+          "Group Information",
+          fluidRow(
             column(12, h3("Group information")),
             column(6, p("How many groups of students are you scheduling?")),
             column(6, numericInput("tmpl_num_groups", "# of groups", 2, min = 1))
@@ -180,7 +195,10 @@ ui <- fluidPage(
             column(6, p("What is the maximum number of students per group?")),
             column(6, numericInput("tmpl_max_students", "Max # of students/group", 6, min = 1))
           ),
-          uiOutput("tmpl_student_colors_ui"),
+          uiOutput("tmpl_student_colors_ui")
+        ),
+        tabPanel(
+          "Student Information",
           fluidRow(
             column(12, h3("Total number of students")),
             column(6, p("What is the total number of students across all groups?")),
@@ -201,31 +219,39 @@ ui <- fluidPage(
           fluidRow(
             column(
               12,
-              actionButton("show_student_table", "Show/Hide Student Table", style = "background-color: #33619E; color: white;"),
-              conditionalPanel(
-                condition = "input.show_student_table % 2 == 1",
-                DT::DTOutput("tmpl_student_table")
-              )
+              DT::DTOutput("tmpl_student_table"),
             )
           ),
-          fluidRow(
-            column(12, h3("Station information")),
-            column(6, p("How many stations are there in the schedule?")),
-            column(6, numericInput("tmpl_num_stations", "# of stations", 6, min = 1))
-          ),
-          uiOutput("tmpl_station_info_ui"),
-          downloadButton("download_template", "Download Blank Template")
-        ), tabPanel("Generated Schedules", uiOutput("scheduleTabs")),
-        tabPanel(
-          "Student Schedule",
-          selectInput("student_select", "Select Student", choices = NULL),
-          uiOutput("student_schedule_table")
+
+        )
+      ),
+    )
+  ),
+  tabPanel(
+    "Build Schedules",
+    fluidPage(
+      titlePanel("Schedule Generator"),
+      sidebarLayout(
+        sidebarPanel(
+          fileInput("file", "Upload Excel File", accept = ".xlsx"),
+          downloadButton("download", "Download Schedules"),
+          downloadButton("download_students", "Download Student Schedules")
         ),
-        tabPanel("Student Info", tableOutput("studentInfo")),
-        tabPanel("Group Info", tableOutput("groupInfo")),
-        tabPanel("Time Blocks", tableOutput("timeBlockInfo")),
-        tabPanel("Schedule Template", uiOutput("schedule")),
-        # --- NEW TAB ---
+        mainPanel(
+          tabsetPanel(
+            tabPanel("Generated Schedules", uiOutput("scheduleTabs")),
+            tabPanel(
+              "Student Schedule",
+              selectInput("student_select", "Select Student", choices = NULL),
+              uiOutput("student_schedule_table")
+            ),
+            tabPanel("Student Info", tableOutput("studentInfo")),
+            tabPanel("Group Info", tableOutput("groupInfo")),
+            tabPanel("Time Blocks", tableOutput("timeBlockInfo")),
+            tabPanel("Schedule Template", uiOutput("schedule")),
+            # --- NEW TAB ---
+          )
+        )
       )
     )
   )
@@ -1338,8 +1364,9 @@ server <- function(input, output, session) {
       input$tmpl_num_starttimes,
       input$tmpl_num_stations
     )
-    update_tmpl_group_info()
     update_tmpl_starttime_names()
+    update_tmpl_group_info()
+    print("about to update tmpl_inputs")
     update_tmpl_station_info()
 
     num_groups <- input$tmpl_num_groups
@@ -1411,27 +1438,37 @@ server <- function(input, output, session) {
       stringsAsFactors = FALSE
     )
 
-    # timeBlockInfo: one column per start time, values from UI
+    # Build timeBlockInfo: one row per start time
     timeBlockInfo <- data.frame(
-      timeBlock = paste0("TimeBlock", seq_len(num_timeblocks)),
+      startTimeLabel = start_time_names,
+      arrivalTime = NA_real_,
+      leaveTime = NA_real_,
       stringsAsFactors = FALSE
     )
-    arrival_times <- character(num_starttimes)
-    end_times <- character(num_starttimes)
+    
     for (i in seq_along(start_time_names)) {
-      timeBlockInfo[[start_time_names[i]]] <- timeblock_times[[i]]
       arrival_key <- paste0("tmpl_arrival_", i)
       end_key <- paste0("tmpl_end_", i)
-      arrival_times[i] <- input[[arrival_key]]
-      end_times[i] <- input[[end_key]]
+      arrival_val <- tmpl_inputs$arrival_times[[arrival_key]]
+      end_val <- tmpl_inputs$end_times[[end_key]]
+      # Excel time as fraction of day
+      timeBlockInfo$arrivalTime[i] <- if (!is.null(arrival_val) && !is.na(arrival_val)) {
+        as.numeric(as.POSIXlt(arrival_val)) %% 86400 / 86400
+      } else {
+        NA
+      }
+      timeBlockInfo$leaveTime[i] <- if (!is.null(end_val) && !is.na(end_val)) {
+        as.numeric(as.POSIXlt(end_val)) %% 86400 / 86400
+      } else {
+        NA
+      }
+      # Add time blocks for this start time
+      tb_vals <- timeblock_times[[i]]
+      for (tb_idx in seq_len(num_timeblocks)) {
+        colname <- paste0("TimeBlock", tb_idx)
+        timeBlockInfo[i, colname] <- if (!is.null(tb_vals[tb_idx])) tb_vals[tb_idx] else ""
+      }
     }
-    # Add arrival and end time as separate rows (or columns, see next step)
-    timeBlockInfo <- rbind(
-      data.frame(timeBlock = "Participant arrival time", t(arrival_times), stringsAsFactors = FALSE),
-      data.frame(timeBlock = "Participant end time", t(end_times), stringsAsFactors = FALSE),
-      timeBlockInfo
-    )
-    names(timeBlockInfo)[-1] <- start_time_names
 
     # schedule: use actual station info from UI
     schedule <- {
@@ -1505,6 +1542,14 @@ server <- function(input, output, session) {
       }
       addWorksheet(wb, "timeBlockInfo")
       writeData(wb, "timeBlockInfo", tmpl$timeBlockInfo)
+      time_style <- createStyle(numFmt = "hh:mm")
+      # Format arrivalTime and leaveTime columns as time
+      addStyle(
+        wb, "timeBlockInfo", time_style,
+        rows = 2:(nrow(tmpl$timeBlockInfo) + 1),
+        cols = which(names(tmpl$timeBlockInfo) %in% c("arrivalTime", "leaveTime")),
+        gridExpand = TRUE, stack = TRUE
+      )
       addWorksheet(wb, "schedule")
       writeData(wb, "schedule", tmpl$schedule)
       addWorksheet(wb, "faculty")
