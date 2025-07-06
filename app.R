@@ -204,11 +204,14 @@ ui <- navbarPage(
               uiOutput("tmpl_student_overflow_warning")
             )
           ),
-          fluidRow(
+            fluidRow(
             column(12, h3("Student Information")),
             column(12, p("Enter student info below, or paste from Excel (columns: Last Name, First Name, Group #, Student #).")),
             column(6, actionButton("tmpl_paste_students", "Paste from Excel")),
-            column(6, actionButton("tmpl_fix_group_student_num_btn", "(Re)calculate group/student numbers"))
+            column(6, actionButton("tmpl_fix_group_student_num_btn", "(Re)calculate group/student numbers")),
+            column(12, 
+              uiOutput("tmpl_student_warning_ui")
+            )
           ),
           fluidRow(
             column(
@@ -660,6 +663,64 @@ server <- function(input, output, session) {
     updateNumericInput(session, "tmpl_total_students", value = nrow(df))
     tmpl_students(df)
     removeModal()
+  })
+
+  check_duplicate_student_numbers <- function(df) {
+    # Find duplicated groupNum/studentNum pairs (both directions)
+    dups <- duplicated(df[, c("groupNum", "studentNum")]) | duplicated(df[, c("groupNum", "studentNum")], fromLast = TRUE)
+    if (any(dups)) {
+      dup_rows <- which(dups)
+      dup_pairs <- unique(df[dups, c("groupNum", "studentNum")])
+      # For each duplicated pair, find all row numbers and names where it occurs
+      result <- do.call(rbind, lapply(seq_len(nrow(dup_pairs)), function(i) {
+        rows <- which(df$groupNum == dup_pairs$groupNum[i] & df$studentNum == dup_pairs$studentNum[i])
+        data.frame(
+          groupNum = dup_pairs$groupNum[i],
+          studentNum = dup_pairs$studentNum[i],
+          row = paste(rows, collapse = ", "),
+          names = paste(paste0(df$firstName[rows], " ", df$lastName[rows], " (row ", rows, ")"), collapse = ", ")
+        )
+      }))
+      return(result)
+    } else {
+      return(NULL)
+    }
+  }
+
+  output$tmpl_student_warning_ui <- renderUI({
+    df <- tmpl_students()
+    dups <- check_duplicate_student_numbers(df)
+    if (!is.null(dups)) {
+      messages <- lapply(seq_len(nrow(dups)), function(i) {
+        # Split names for Oxford comma formatting
+        name_list <- unlist(strsplit(dups$names[i], ",\\s*"))
+        if (length(name_list) > 2) {
+          names_fmt <- paste(
+            paste(name_list[-length(name_list)], collapse = ", "),
+            "and", name_list[length(name_list)]
+          )
+        } else if (length(name_list) == 2) {
+          names_fmt <- paste(name_list[1], "and", name_list[2])
+        } else {
+          names_fmt <- name_list[1]
+        }
+        paste0(
+          "Group #", dups$groupNum[i], ", Student #", dups$studentNum[i], ": Multiple students found - ",
+          names_fmt
+        )
+      })
+      div(
+        style = "color: #b30000; font-weight: bold; margin-bottom: 10px;",
+        tagList(
+          "Warning: Duplicate group/student number pairs found:",
+          tags$ul(
+            lapply(messages, tags$li)
+          )
+        )
+      )
+    } else {
+      NULL
+    }
   })
 
   observeEvent(input$tmpl_fix_group_student_num_btn, {
