@@ -1557,6 +1557,15 @@ server <- function(input, output, session) {
       saveWorkbook(wb, file, overwrite = TRUE)
     }
   )
+
+  # this ensures that the UI elements for the template creator are always active, including when the tab hasn't been clicked yet
+  outputOptions(output, "tmpl_starttime_names_ui", suspendWhenHidden = FALSE)
+  outputOptions(output, "tmpl_timeblock_times_ui", suspendWhenHidden = FALSE)
+  outputOptions(output, "tmpl_group_info_ui", suspendWhenHidden = FALSE)
+  outputOptions(output, "tmpl_student_colors_ui", suspendWhenHidden = FALSE)
+  outputOptions(output, "tmpl_student_overflow_warning", suspendWhenHidden = FALSE)
+  outputOptions(output, "tmpl_student_table", suspendWhenHidden = FALSE)
+  outputOptions(output, "tmpl_station_info_ui", suspendWhenHidden = FALSE)
 }
 
 shinyApp(ui, server)
