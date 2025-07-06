@@ -206,7 +206,7 @@ ui <- navbarPage(
           ),
           fluidRow(
             column(12, h3("Student Information")),
-            column(12, p("Enter student info below, or paste from Excel (columns: Last Name, First Name, Group #).")),
+            column(12, p("Enter student info below, or paste from Excel (columns: Last Name, First Name, Group #, Student #).")),
             column(6, actionButton("tmpl_paste_students", "Paste from Excel")),
             column(6, actionButton("tmpl_fix_group_student_num_btn", "(Re)calculate group/student numbers"))
           ),
@@ -441,7 +441,7 @@ server <- function(input, output, session) {
               default_start <- strptime(sprintf("%02d:%02d", start_minutes %/% 60, start_minutes %% 60), "%H:%M")
               default_end <- strptime(sprintf("%02d:%02d", end_minutes %/% 60, end_minutes %% 60), "%H:%M")
             } else if (tolower(label) == "pm") {
-              start_minutes <- 12 * 60 + 30 + (tb_idx - 1) * 30
+              start_minutes <- 13 * 60 + (tb_idx - 1) * 30
               end_minutes <- start_minutes + 30
               default_start <- strptime(sprintf("%02d:%02d", start_minutes %/% 60, start_minutes %% 60), "%H:%M")
               default_end <- strptime(sprintf("%02d:%02d", end_minutes %/% 60, end_minutes %% 60), "%H:%M")
@@ -630,15 +630,34 @@ server <- function(input, output, session) {
     parsed <- do.call(rbind, lapply(lines, function(line) {
       vals <- strsplit(line, "[\t,]")[[1]]
       vals <- trimws(vals)
-      # Pad to 3 columns
-      length(vals) <- 3
+      # Pad or trim to 4 columns
+      length(vals) <- 4
       vals
     }))
     df <- as.data.frame(parsed, stringsAsFactors = FALSE)
-    names(df) <- c("lastName", "firstName", "groupNum")
-    df$studentNum <- seq_len(nrow(df))
+    # Assign column names
+    names(df) <- c("lastName", "firstName", "groupNum", "studentNum")
+    n <- nrow(df)
+    max_per_group <- input$tmpl_max_students
+  
+    # Fill missing groupNum if needed
+    if (all(is.na(df$groupNum)) || all(df$groupNum == "")) {
+      df$groupNum <- rep(seq_len(ceiling(n / max_per_group)), each = max_per_group, length.out = n)
+    }
+  
+    # Fill missing studentNum if needed
+    if (all(is.na(df$studentNum)) || all(df$studentNum == "")) {
+      df$studentNum <- rep(seq_len(max_per_group), times = ceiling(n / max_per_group), length.out = n)
+    }
+  
+    # Ensure correct types
+    df$groupNum <- as.character(df$groupNum)
+    df$studentNum <- as.integer(df$studentNum)
+  
+    # Only keep the four columns in the right order
     df <- df[, c("lastName", "firstName", "groupNum", "studentNum")]
-    updateNumericInput(session, "tmpl_total_students", value = nrow(df)) # <-- Add this line
+  
+    updateNumericInput(session, "tmpl_total_students", value = nrow(df))
     tmpl_students(df)
     removeModal()
   })
