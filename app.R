@@ -206,7 +206,7 @@ ui <- navbarPage(
           ),
             fluidRow(
             column(12, h3("Student Information")),
-            column(12, p("Enter student info below, or paste from Excel (columns: Last Name, First Name, Group #, Student #).")),
+            column(12, p("Enter student info below, or click the button to paste from Excel (columns: Last Name, First Name, Group #, Student #).")),
             column(6, actionButton("tmpl_paste_students", "Paste from Excel")),
             column(6, actionButton("tmpl_fix_group_student_num_btn", "(Re)calculate group/student numbers")),
             column(12, 
@@ -214,6 +214,10 @@ ui <- navbarPage(
             )
           ),
           fluidRow(
+            column(
+              12,
+              helpText("Double-click on a cell in the table below to edit it.")
+            ),
             column(
               12,
               DT::DTOutput("tmpl_student_table"),
@@ -351,7 +355,7 @@ server <- function(input, output, session) {
         endTime <- input[[paste0(prefix, "endTime")]]
         timeOfDay <- input[[paste0(prefix, "timeOfDay")]]
         tmpl_group_info$groups[[i]] <- list(
-          groupNum = if (!is.null(groupNum)) groupNum else paste0("Group ", i),
+          groupNum = if (!is.null(groupNum)) groupNum else i,
           date = if (!is.null(date)) date else NULL,
           startTime = if (!is.null(startTime)) startTime else "",
           endTime = if (!is.null(endTime)) endTime else "",
@@ -580,7 +584,7 @@ server <- function(input, output, session) {
       new_df <- data.frame(
         lastName = "",
         firstName = "",
-        groupNum = groupNum,
+        groupNum = as.character(groupNum),
         studentNum = studentNum,
         stringsAsFactors = FALSE
       )
@@ -602,7 +606,7 @@ server <- function(input, output, session) {
       tmpl_students()[, c("lastName", "firstName", "groupNum", "studentNum")],
       editable = TRUE,
       rownames = FALSE,
-      options = list(dom = "t", ordering = FALSE, pageLength = 100)
+      options = list(dom = "t", ordering = TRUE, pageLength = 100)
     )
   })
 
@@ -618,7 +622,7 @@ server <- function(input, output, session) {
   observeEvent(input$tmpl_paste_students, {
     showModal(modalDialog(
       title = "Paste Student Info from Excel",
-      "Paste rows (Last Name, First Name, Group #, Student #) below, one per line, tab or comma separated.",
+      "Paste rows (Last Name, First Name, Group #, Student #) below, one per line, tab or comma separated. You can include just the first two columns (Last Name, First Name) if you want to auto-generate group and student numbers.",
       textAreaInput("tmpl_paste_text", "Paste Here", rows = 10, width = "100%"),
       footer = tagList(
         modalButton("Cancel"),
@@ -690,9 +694,26 @@ server <- function(input, output, session) {
   output$tmpl_student_warning_ui <- renderUI({
     df <- tmpl_students()
     dups <- check_duplicate_student_numbers(df)
+  
+    # Check for groupNum not in groupInfo
+    groupInfo_names <- NULL
+    if (!is.null(tmpl_group_info$groups) && length(tmpl_group_info$groups) > 0) {
+      groupInfo_names <- sapply(tmpl_group_info$groups, function(g) {
+        if (!is.null(g$groupNum) && g$groupNum != "") as.character(g$groupNum) else NA
+      })
+      groupInfo_names <- groupInfo_names[!is.na(groupInfo_names)]
+    }
+    missing_groups <- NULL
+    if (!is.null(df) && !is.null(groupInfo_names)) {
+      missing_groups <- setdiff(unique(df$groupNum), groupInfo_names)
+      missing_groups <- missing_groups[!is.na(missing_groups) & missing_groups != ""]
+    }
+  
+    warnings <- list()
+  
+    # Duplicate warning
     if (!is.null(dups)) {
       messages <- lapply(seq_len(nrow(dups)), function(i) {
-        # Split names for Oxford comma formatting
         name_list <- unlist(strsplit(dups$names[i], ",\\s*"))
         if (length(name_list) > 2) {
           names_fmt <- paste(
@@ -705,19 +726,39 @@ server <- function(input, output, session) {
           names_fmt <- name_list[1]
         }
         paste0(
-          "Group #", dups$groupNum[i], ", Student #", dups$studentNum[i], ": Multiple students found - ",
-          names_fmt
+          names_fmt,
+          " are in group ", dups$groupNum[i],
+          " and listed as student ", dups$studentNum[i]
         )
       })
-      div(
-        style = "color: #b30000; font-weight: bold; margin-bottom: 10px;",
-        tagList(
-          "Warning: Duplicate group/student number pairs found:",
-          tags$ul(
-            lapply(messages, tags$li)
+      warnings <- c(warnings, list(
+        div(
+          style = "color: #b30000; font-weight: bold; margin-bottom: 10px;",
+          tagList(
+            "Warning: Duplicate group/student number pairs found:",
+            tags$ul(
+              lapply(messages, tags$li)
+            )
           )
         )
-      )
+      ))
+    }
+  
+    # Missing groupNum warning
+    if (length(missing_groups) > 0) {
+      warnings <- c(warnings, list(
+        div(
+          style = "color: #b30000; font-weight: bold; margin-bottom: 10px;",
+          paste0(
+            "Warning: The following group(s) in the student list do(es) not exist in the group info: ",
+            paste(missing_groups, collapse = ", ")
+          )
+        )
+      ))
+    }
+  
+    if (length(warnings) > 0) {
+      tagList(warnings)
     } else {
       NULL
     }
@@ -735,7 +776,7 @@ server <- function(input, output, session) {
     new_df <- data.frame(
       lastName = "",
       firstName = "",
-      groupNum = groupNum,
+      groupNum = as.character(groupNum),
       studentNum = studentNum,
       stringsAsFactors = FALSE
     )
@@ -1553,7 +1594,7 @@ server <- function(input, output, session) {
     )
     for (i in seq_len(num_groups)) {
       group <- tmpl_group_info$groups[[i]]
-      groupInfo$groupNum[i] <- if (!is.null(group) && !is.null(group$groupNum)) group$groupNum else paste0("Group ", i)
+      groupInfo$groupNum[i] <- if (!is.null(group) && !is.null(group$groupNum)) group$groupNum else i
       groupInfo$date[i] <- if (!is.null(group) && !is.null(group$date)) group$date else ""
       groupInfo$timeOfDay[i] <- if (!is.null(group) && !is.null(group$timeOfDay)) {
         get_start_time_label(group$timeOfDay, start_time_names)
