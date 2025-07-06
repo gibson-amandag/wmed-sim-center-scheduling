@@ -1368,10 +1368,11 @@ server <- function(input, output, session) {
       input$tmpl_num_starttimes,
       input$tmpl_num_stations
     )
-    update_tmpl_starttime_names()
-    update_tmpl_group_info()
-    print("about to update tmpl_inputs")
-    update_tmpl_station_info()
+    # Trying to run these when pressing the download button instead of within this function
+    # update_tmpl_starttime_names()
+    # update_tmpl_group_info()
+    # print("about to update tmpl_inputs")
+    # update_tmpl_station_info()
 
     num_groups <- input$tmpl_num_groups
     max_students <- input$tmpl_max_students
@@ -1522,6 +1523,10 @@ server <- function(input, output, session) {
       "Blank_Schedule_Template.xlsx"
     },
     content = function(file) {
+      update_tmpl_starttime_names()
+      update_tmpl_group_info()
+      update_tmpl_station_info()
+
       tmpl <- template_data()
       wb <- createWorkbook()
       addWorksheet(wb, "studentInfo")
