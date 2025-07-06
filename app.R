@@ -399,18 +399,52 @@ server <- function(input, output, session) {
       key <- paste0("tmpl_starttime_name_", i)
       if (!is.null(tmpl_inputs$starttime_names[[key]])) tmpl_inputs$starttime_names[[key]] else if (i == 1) "AM" else if (i == 2) "PM" else paste0("Start", i)
     })
-    tagList(
+    fluidRow(
       lapply(seq_len(n_st), function(st_idx) {
-        fluidRow(
-          column(12, h5(paste0("Times for ", ifelse(!is.null(start_names[st_idx]) && start_names[st_idx] != "", start_names[st_idx], paste0("Start ", st_idx))))),
+        column(
+          6,
+          fluidRow(
+            column(
+              12,
+              h5(
+                style = "color: #007bff;",
+                paste0(
+                  "Time Blocks for ",
+                  ifelse(
+                  !is.null(start_names[st_idx]) && start_names[st_idx] != "",
+                  start_names[st_idx],
+                  paste0("Start ", st_idx)
+                  )
+                )
+              )
+            )
+          ),
           lapply(seq_len(n_tb), function(tb_idx) {
-            key <- paste0("tmpl_timeblock_", st_idx, "_", tb_idx)
-            val <- if (!is.null(tmpl_inputs$timeblock_times[[key]])) tmpl_inputs$timeblock_times[[key]] else ""
-            column(3, textInput(
-              key,
-              paste0("Time for Block ", tb_idx),
-              value = val
-            ))
+            start_key <- paste0("tmpl_timeblock_", st_idx, "_", tb_idx, "_start")
+            end_key <- paste0("tmpl_timeblock_", st_idx, "_", tb_idx, "_end")
+            # Set default times: AM = 8:00, PM = 12:30, else blank
+            label <- start_names[st_idx]
+            if (tolower(label) == "am") {
+              default_start <- strptime(sprintf("%02d:%02d", 8 + (tb_idx - 1) %/% 2, ifelse((tb_idx - 1) %% 2 == 0, 0, 30)), "%H:%M")
+              default_end <- strptime(sprintf("%02d:%02d", 8 + (tb_idx - 1) %/% 2, ifelse((tb_idx - 1) %% 2 == 0, 30, 0)), "%H:%M")
+            } else if (tolower(label) == "pm") {
+              default_start <- strptime(sprintf("%02d:%02d", 12 + (tb_idx - 1) %/% 2, ifelse((tb_idx - 1) %% 2 == 0, 30, 0)), "%H:%M")
+              default_end <- strptime(sprintf("%02d:%02d", 12 + (tb_idx - 1) %/% 2 + ifelse((tb_idx - 1) %% 2 == 0, 0, 1), ifelse((tb_idx - 1) %% 2 == 0, 0, 0)), "%H:%M")
+              # PM: 12:30, 1:00, 1:30, 2:00, etc.
+            } else {
+              default_start <- NA
+              default_end <- NA
+            }
+            fluidRow(
+              column(
+                6,
+                timeInput(start_key, paste0("Block ", tb_idx, " Start"), value = input[[start_key]] %||% default_start, seconds = FALSE)
+              ),
+              column(
+                6,
+                timeInput(end_key, paste0("Block ", tb_idx, " End"), value = input[[end_key]] %||% default_end, seconds = FALSE)
+              )
+            )
           })
         )
       })
@@ -1444,34 +1478,45 @@ server <- function(input, output, session) {
     )
 
     # Build timeBlockInfo: one row per start time
+    # Build timeBlockInfo: one row per start time, columns for each block's start/end
     timeBlockInfo <- data.frame(
       startTimeLabel = start_time_names,
       arrivalTime = NA_real_,
       leaveTime = NA_real_,
       stringsAsFactors = FALSE
     )
-    
+
     for (i in seq_along(start_time_names)) {
       arrival_key <- paste0("tmpl_arrival_", i)
       end_key <- paste0("tmpl_end_", i)
       arrival_val <- tmpl_inputs$arrival_times[[arrival_key]]
       end_val <- tmpl_inputs$end_times[[end_key]]
-      # Excel time as fraction of day
+      # Excel time as fraction of day (UTC, no timezone offset)
       timeBlockInfo$arrivalTime[i] <- if (!is.null(arrival_val) && !is.na(arrival_val)) {
-        as.numeric(as.POSIXlt(arrival_val)) %% 86400 / 86400
+        (hour(arrival_val) * 3600 + minute(arrival_val) * 60 + second(arrival_val)) / 86400
       } else {
         NA
       }
       timeBlockInfo$leaveTime[i] <- if (!is.null(end_val) && !is.na(end_val)) {
-        as.numeric(as.POSIXlt(end_val)) %% 86400 / 86400
+        (hour(end_val) * 3600 + minute(end_val) * 60 + second(end_val)) / 86400
       } else {
         NA
       }
-      # Add time blocks for this start time
-      tb_vals <- timeblock_times[[i]]
       for (tb_idx in seq_len(num_timeblocks)) {
-        colname <- paste0("TimeBlock", tb_idx)
-        timeBlockInfo[i, colname] <- if (!is.null(tb_vals[tb_idx])) tb_vals[tb_idx] else ""
+        start_key <- paste0("tmpl_timeblock_", i, "_", tb_idx, "_start")
+        end_key <- paste0("tmpl_timeblock_", i, "_", tb_idx, "_end")
+        start_val <- input[[start_key]]
+        end_val <- input[[end_key]]
+        timeBlockInfo[i, paste0("Block", tb_idx, "_Start")] <- if (!is.null(start_val) && !is.na(start_val)) {
+          (hour(start_val) * 3600 + minute(start_val) * 60 + second(start_val)) / 86400
+        } else {
+          NA
+        }
+        timeBlockInfo[i, paste0("Block", tb_idx, "_End")] <- if (!is.null(end_val) && !is.na(end_val)) {
+          (hour(end_val) * 3600 + minute(end_val) * 60 + second(end_val)) / 86400
+        } else {
+          NA
+        }
       }
     }
 
@@ -1552,11 +1597,12 @@ server <- function(input, output, session) {
       addWorksheet(wb, "timeBlockInfo")
       writeData(wb, "timeBlockInfo", tmpl$timeBlockInfo)
       time_style <- createStyle(numFmt = "hh:mm")
-      # Format arrivalTime and leaveTime columns as time
+      # Find all columns that are times
+      time_cols <- which(grepl("Time$|_Start$|_End$", names(tmpl$timeBlockInfo)))
       addStyle(
         wb, "timeBlockInfo", time_style,
         rows = 2:(nrow(tmpl$timeBlockInfo) + 1),
-        cols = which(names(tmpl$timeBlockInfo) %in% c("arrivalTime", "leaveTime")),
+        cols = time_cols,
         gridExpand = TRUE, stack = TRUE
       )
       addWorksheet(wb, "schedule")
