@@ -156,7 +156,7 @@ ui <- navbarPage(
       ),
       tabsetPanel(
         tabPanel(
-          "Time and Station Information",
+          "Time Information",
           fluidRow(
             column(12, h3("Start Time Information")),
             column(
@@ -231,8 +231,32 @@ ui <- navbarPage(
             column(6, p("How many stations are there in the schedule?")),
             column(6, numericInput("tmpl_num_stations", "# of stations", 6, min = 1))
           ),
-          uiOutput("tmpl_station_info_ui")
-        )
+          fluidRow(
+            column(
+              12,
+              class = "col-md-8",
+              fluidRow(
+                column(
+                  12,
+                  h3("Assign students to stations"),
+                  p("For stations that are longer than one time block, assign the same student number back-to-back."),
+                  actionButton("tmpl_clear_assignments", "Clear All Assignments", icon = icon("eraser"), class = "btn-warning"),
+                  uiOutput("tmpl_schedule_warning_ui"),
+                  uiOutput("tmpl_schedule_ui")
+                )
+              )
+            ),
+            column(
+              12,
+              class = "col-md-4",
+              fluidRow(
+                column(12,
+                  uiOutput("tmpl_station_info_ui")
+                )
+              )
+            )
+          )
+        ),
       ),
     )
   ),
@@ -810,12 +834,15 @@ server <- function(input, output, session) {
         station_color_val <- if (!is.null(station$stationColor)) station$stationColor else "#FFFFFF"
         tagList(
           fluidRow(
-            column(width = 3, class = "col-lg-2", textInput(paste0(prefix, "shortKey"), "Short Key", value = short_key_val)),
-            column(width = 6, class = "col-lg-2", textInput(paste0(prefix, "niceName"), "Station Name", value = nice_name_val)),
-            column(width = 3, class = "col-lg-2", numericInput(paste0(prefix, "timeInMin"), "Duration (min)", value = time_in_min_val, min = 0)),
-            column(width = 4, class = "col-lg-2", textInput(paste0(prefix, "room1"), "Main Room", value = room1_val)),
-            column(width = 4, class = "col-lg-2", textInput(paste0(prefix, "room2"), "Additional Room", value = room2_val)),
-            column(width = 4, class = "col-lg-2", colourpicker::colourInput(paste0(prefix, "stationColor"), "Color", value = station_color_val, showColour = "both"))
+            column(12, h4(paste0("Station ", i)))
+          ),
+          fluidRow(
+            column(3, class = "col-md-6", textInput(paste0(prefix, "shortKey"), "Short Key", value = short_key_val)),
+            column(6, class = "col-md-6", textInput(paste0(prefix, "niceName"), "Station Name", value = nice_name_val)),
+            column(3, class = "col-md-6", numericInput(paste0(prefix, "timeInMin"), "Duration (min)", value = time_in_min_val, min = 0)),
+            column(4, class = "col-md-6", colourpicker::colourInput(paste0(prefix, "stationColor"), "Color", value = station_color_val, showColour = "both")),
+            column(4, class = "col-md-6", textInput(paste0(prefix, "room1"), "Main Room", value = room1_val)),
+            column(4, class = "col-md-6", textInput(paste0(prefix, "room2"), "Additional Room", value = room2_val))
           ),
           fluidRow(
             column(12, textInput(paste0(prefix, "notes"), "Notes", value = notes_val))
@@ -852,6 +879,127 @@ server <- function(input, output, session) {
   # Save station info reactively
   observe({
     update_tmpl_station_info()
+  })
+
+  output$tmpl_schedule_ui <- renderUI({
+    req(input$tmpl_num_stations, input$tmpl_num_timeblocks, input$tmpl_max_students)
+    n_stations <- input$tmpl_num_stations
+    n_blocks <- input$tmpl_num_timeblocks
+    max_students <- input$tmpl_max_students
+    student_choices <- c("Break" = "", as.character(seq_len(max_students)))
+  
+    # Get student colors from the color pickers
+    student_colors <- sapply(seq_len(max_students), function(i) {
+      key <- paste0("tmpl_student_color_", i)
+      val <- input[[key]]
+      if (is.null(val) || val == "") "#FFFFFF" else val
+    })
+    names(student_colors) <- as.character(seq_len(max_students))
+  
+    station_names <- sapply(seq_len(n_stations), function(i) {
+      input[[paste0("tmpl_station_", i, "_niceName")]]
+    })
+  
+    header <- tags$tr(
+      tags$th("Station"),
+      lapply(seq_len(n_blocks), function(j) tags$th(paste("Block", j)))
+    )
+  
+    rows <- lapply(seq_len(n_stations), function(i) {
+      station_name <- station_names[i]
+      if (is.null(station_name) || station_name == "") station_name <- paste("Station", i)
+      tags$tr(
+        tags$td(station_name),
+        lapply(seq_len(n_blocks), function(j) {
+          inputId <- paste0("sched_", i, "_", j)
+          # Get the selected value for this selectInput
+          selected_val <- input[[inputId]]
+          # Determine background color
+          bg_color <- if (!is.null(selected_val) && selected_val != "" && selected_val %in% names(student_colors)) {
+            student_colors[[selected_val]]
+          } else if (!is.null(selected_val) && selected_val == "") {
+            "#e8e8e8"
+          } else {
+            "#FFFFFF"
+          }
+          tags$td(
+            style = paste0("background-color:", bg_color, ";"),
+            selectInput(inputId, NULL, choices = student_choices, selected = selected_val, width = "100%")
+          )
+        })
+      )
+    })
+  
+    tags$div(
+      style = "max-height: 400px; overflow-x: auto; overflow-y: auto; border:1px solid #ccc; border-radius:4px; padding:8px; background:#fff;",
+      tags$table(
+        style = "width:100%; border-collapse:collapse;border:",
+        tags$thead(header),
+        tags$tbody(rows)
+      ),
+      tags$style(HTML("
+        #tmpl_schedule_ui table tr th, #tmpl_schedule_ui table tr td {
+          border: 1px solid #333 !important;
+          padding: 4px 8px !important;
+          vertical-align: middle;
+        }
+        #tmpl_schedule_ui table tr th {
+          background: #f8f9fa;
+          font-weight: bold;
+          text-align: center;
+        }
+        #tmpl_schedule_ui table tr td {
+          text-align: center;
+        }
+      "))
+    )
+  })
+
+  check_duplicate_station_assignments <- function(n_stations, n_blocks, input) {
+    warnings <- list()
+    for (j in seq_len(n_blocks)) {
+      selected <- sapply(seq_len(n_stations), function(i) {
+        input[[paste0("sched_", i, "_", j)]]
+      })
+      # Remove blanks/breaks
+      selected <- selected[selected != "" & !is.na(selected)]
+      dups <- selected[duplicated(selected)]
+      if (length(dups) > 0) {
+        dups <- unique(dups)
+        warnings[[length(warnings) + 1]] <- paste(
+          "Block", j, ": Student(s)", paste(dups, collapse = ", "),
+          "assigned to multiple stations."
+        )
+      }
+    }
+    warnings
+  }
+
+  output$tmpl_schedule_warning_ui <- renderUI({
+    req(input$tmpl_num_stations, input$tmpl_num_timeblocks)
+    n_stations <- input$tmpl_num_stations
+    n_blocks <- input$tmpl_num_timeblocks
+    warnings <- check_duplicate_station_assignments(n_stations, n_blocks, input)
+    if (length(warnings) > 0) {
+      div(
+        style = "color: #b30000; font-weight: bold; margin-bottom: 10px;",
+        tagList(
+          "Warning: The following students are assigned to multiple stations in the same block:",
+          tags$ul(lapply(warnings, tags$li))
+        )
+      )
+    }
+  })
+
+  observeEvent(input$tmpl_clear_assignments, {
+    req(input$tmpl_num_stations, input$tmpl_num_timeblocks)
+    n_stations <- input$tmpl_num_stations
+    n_blocks <- input$tmpl_num_timeblocks
+    for (i in seq_len(n_stations)) {
+      for (j in seq_len(n_blocks)) {
+        updateSelectInput(session, paste0("sched_", i, "_", j), selected = "")
+      }
+    }
   })
 
   observeEvent(input$file, {
@@ -1539,11 +1687,6 @@ server <- function(input, output, session) {
       input$tmpl_num_starttimes,
       input$tmpl_num_stations
     )
-    # Trying to run these when pressing the download button instead of within this function
-    # update_tmpl_starttime_names()
-    # update_tmpl_group_info()
-    # print("about to update tmpl_inputs")
-    # update_tmpl_station_info()
 
     num_groups <- input$tmpl_num_groups
     max_students <- input$tmpl_max_students
@@ -1680,6 +1823,17 @@ server <- function(input, output, session) {
       schedule[[paste0("TimeBlock", i)]] <- ""
     }
 
+    for (i in seq_len(input$tmpl_num_stations)) {
+      for (j in seq_len(input$tmpl_num_timeblocks)) {
+        inputId <- paste0("sched_", i, "_", j)
+        val <- input[[inputId]]
+        colname <- paste0("TimeBlock", j)
+        if (!is.null(val)) {
+          schedule[i, colname] <- val
+        }
+      }
+    }
+
     # faculty: one row per station, one column per group, use station names/keys
     faculty <- data.frame(
       niceName = schedule$niceName,
@@ -1758,6 +1912,7 @@ server <- function(input, output, session) {
   outputOptions(output, "tmpl_student_overflow_warning", suspendWhenHidden = FALSE)
   outputOptions(output, "tmpl_student_table", suspendWhenHidden = FALSE)
   outputOptions(output, "tmpl_station_info_ui", suspendWhenHidden = FALSE)
+  outputOptions(output, "tmpl_schedule_ui", suspendWhenHidden = FALSE)
 }
 
 shinyApp(ui, server)
