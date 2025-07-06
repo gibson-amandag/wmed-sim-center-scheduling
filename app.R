@@ -176,12 +176,7 @@ ui <- navbarPage(
             column(6, numericInput("tmpl_num_timeblocks", "# of time blocks", 6, min = 1))
           ),
           uiOutput("tmpl_timeblock_times_ui"),
-          fluidRow(
-            column(12, h3("Station information")),
-            column(6, p("How many stations are there in the schedule?")),
-            column(6, numericInput("tmpl_num_stations", "# of stations", 6, min = 1))
-          ),
-          uiOutput("tmpl_station_info_ui")
+          
         ),
         tabPanel(
           "Group Information",
@@ -223,7 +218,16 @@ ui <- navbarPage(
             )
           ),
 
-        )
+        ),
+        tabPanel(
+          "Station Information",
+          fluidRow(
+              column(12, h3("Station information")),
+              column(6, p("How many stations are there in the schedule?")),
+              column(6, numericInput("tmpl_num_stations", "# of stations", 6, min = 1))
+            ),
+            uiOutput("tmpl_station_info_ui")
+          )
       ),
     )
   ),
