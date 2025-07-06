@@ -176,7 +176,6 @@ ui <- navbarPage(
             column(6, numericInput("tmpl_num_timeblocks", "# of time blocks", 6, min = 1))
           ),
           uiOutput("tmpl_timeblock_times_ui"),
-          
         ),
         tabPanel(
           "Group Information",
@@ -217,17 +216,16 @@ ui <- navbarPage(
               DT::DTOutput("tmpl_student_table"),
             )
           ),
-
         ),
         tabPanel(
           "Station Information",
           fluidRow(
-              column(12, h3("Station information")),
-              column(6, p("How many stations are there in the schedule?")),
-              column(6, numericInput("tmpl_num_stations", "# of stations", 6, min = 1))
-            ),
-            uiOutput("tmpl_station_info_ui")
-          )
+            column(12, h3("Station information")),
+            column(6, p("How many stations are there in the schedule?")),
+            column(6, numericInput("tmpl_num_stations", "# of stations", 6, min = 1))
+          ),
+          uiOutput("tmpl_station_info_ui")
+        )
       ),
     )
   ),
@@ -315,14 +313,22 @@ server <- function(input, output, session) {
     isolate({
       for (st_idx in seq_len(n_st)) {
         for (tb_idx in seq_len(n_tb)) {
-          key <- paste0("tmpl_timeblock_", st_idx, "_", tb_idx)
-          val <- input[[key]]
-          if (!is.null(val)) tmpl_inputs$timeblock_times[[key]] <- val
+          start_key <- paste0("tmpl_timeblock_", st_idx, "_", tb_idx, "_start")
+          end_key <- paste0("tmpl_timeblock_", st_idx, "_", tb_idx, "_end")
+          start_val <- input[[start_key]]
+          end_val <- input[[end_key]]
+          if (!is.null(start_val)) tmpl_inputs$timeblock_times[[start_key]] <- start_val
+          if (!is.null(end_val)) tmpl_inputs$timeblock_times[[end_key]] <- end_val
         }
       }
       # Remove any extra if n_tb or n_st decreased
       valid_keys <- unlist(lapply(seq_len(n_st), function(st_idx) {
-        paste0("tmpl_timeblock_", st_idx, "_", seq_len(n_tb))
+        unlist(lapply(seq_len(n_tb), function(tb_idx) {
+          c(
+            paste0("tmpl_timeblock_", st_idx, "_", tb_idx, "_start"),
+            paste0("tmpl_timeblock_", st_idx, "_", tb_idx, "_end")
+          )
+        }))
       }))
       to_remove <- setdiff(names(tmpl_inputs$timeblock_times), valid_keys)
       tmpl_inputs$timeblock_times[to_remove] <- NULL
@@ -373,16 +379,22 @@ server <- function(input, output, session) {
           val <- if (!is.null(tmpl_inputs$starttime_names[[key]])) {
             tmpl_inputs$starttime_names[[key]]
           } else if (i == 1) "AM" else if (i == 2) "PM" else paste0("Start", i)
-          # Set default arrival/end times based on index
+          # Use stored values if available
+          arrival_key <- paste0("tmpl_arrival_", i)
+          end_key <- paste0("tmpl_end_", i)
+          stored_arrival <- tmpl_inputs$arrival_times[[arrival_key]]
+          stored_end <- tmpl_inputs$end_times[[end_key]]
           default_arrival <- if (i == 1) strptime("07:30", "%H:%M") else if (i == 2) strptime("12:30", "%H:%M") else strptime("08:00", "%H:%M")
           default_end <- if (i == 1) strptime("12:15", "%H:%M") else if (i == 2) strptime("17:15", "%H:%M") else strptime("12:00", "%H:%M")
           tagList(
             column(4, textInput(key, paste0("Start time label ", i), value = val)),
-            column(4, 
-              timeInput(paste0("tmpl_arrival_", i), "Participant arrival time", value = default_arrival, seconds = FALSE)
+            column(
+              4,
+              timeInput(arrival_key, "Participant arrival time", value = if (!is.null(stored_arrival)) stored_arrival else default_arrival, seconds = FALSE)
             ),
-            column(4, 
-              timeInput(paste0("tmpl_end_", i), "Participant end time", value = default_end, seconds = FALSE)
+            column(
+              4,
+              timeInput(end_key, "Participant end time", value = if (!is.null(stored_end)) stored_end else default_end, seconds = FALSE)
             )
           )
         })
@@ -411,9 +423,9 @@ server <- function(input, output, session) {
                 paste0(
                   "Time Blocks for ",
                   ifelse(
-                  !is.null(start_names[st_idx]) && start_names[st_idx] != "",
-                  start_names[st_idx],
-                  paste0("Start ", st_idx)
+                    !is.null(start_names[st_idx]) && start_names[st_idx] != "",
+                    start_names[st_idx],
+                    paste0("Start ", st_idx)
                   )
                 )
               )
@@ -422,27 +434,31 @@ server <- function(input, output, session) {
           lapply(seq_len(n_tb), function(tb_idx) {
             start_key <- paste0("tmpl_timeblock_", st_idx, "_", tb_idx, "_start")
             end_key <- paste0("tmpl_timeblock_", st_idx, "_", tb_idx, "_end")
-            # Set default times: AM = 8:00, PM = 12:30, else blank
             label <- start_names[st_idx]
             if (tolower(label) == "am") {
-              default_start <- strptime(sprintf("%02d:%02d", 8 + (tb_idx - 1) %/% 2, ifelse((tb_idx - 1) %% 2 == 0, 0, 30)), "%H:%M")
-              default_end <- strptime(sprintf("%02d:%02d", 8 + (tb_idx - 1) %/% 2, ifelse((tb_idx - 1) %% 2 == 0, 30, 0)), "%H:%M")
+              start_minutes <- 8 * 60 + (tb_idx - 1) * 30
+              end_minutes <- start_minutes + 30
+              default_start <- strptime(sprintf("%02d:%02d", start_minutes %/% 60, start_minutes %% 60), "%H:%M")
+              default_end <- strptime(sprintf("%02d:%02d", end_minutes %/% 60, end_minutes %% 60), "%H:%M")
             } else if (tolower(label) == "pm") {
-              default_start <- strptime(sprintf("%02d:%02d", 12 + (tb_idx - 1) %/% 2, ifelse((tb_idx - 1) %% 2 == 0, 30, 0)), "%H:%M")
-              default_end <- strptime(sprintf("%02d:%02d", 12 + (tb_idx - 1) %/% 2 + ifelse((tb_idx - 1) %% 2 == 0, 0, 1), ifelse((tb_idx - 1) %% 2 == 0, 0, 0)), "%H:%M")
-              # PM: 12:30, 1:00, 1:30, 2:00, etc.
+              start_minutes <- 12 * 60 + 30 + (tb_idx - 1) * 30
+              end_minutes <- start_minutes + 30
+              default_start <- strptime(sprintf("%02d:%02d", start_minutes %/% 60, start_minutes %% 60), "%H:%M")
+              default_end <- strptime(sprintf("%02d:%02d", end_minutes %/% 60, end_minutes %% 60), "%H:%M")
             } else {
               default_start <- NA
               default_end <- NA
             }
+            stored_start <- tmpl_inputs$timeblock_times[[start_key]]
+            stored_end <- tmpl_inputs$timeblock_times[[end_key]]
             fluidRow(
               column(
                 6,
-                timeInput(start_key, paste0("Block ", tb_idx, " Start"), value = input[[start_key]] %||% default_start, seconds = FALSE)
+                timeInput(start_key, paste0("Block ", tb_idx, " Start"), value = if (!is.null(stored_start)) stored_start else default_start, seconds = FALSE)
               ),
               column(
                 6,
-                timeInput(end_key, paste0("Block ", tb_idx, " End"), value = input[[end_key]] %||% default_end, seconds = FALSE)
+                timeInput(end_key, paste0("Block ", tb_idx, " End"), value = if (!is.null(stored_end)) stored_end else default_end, seconds = FALSE)
               )
             )
           })
