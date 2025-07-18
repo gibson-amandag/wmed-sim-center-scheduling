@@ -2078,13 +2078,15 @@ server <- function(input, output, session) {
 
     # faculty: one row per station, one column per group, use station names/keys
     update_faculty_assignments()
-    faculty <- data.frame(
-      shortKey = schedule$shortKey,
-      stringsAsFactors = FALSE
-    )
-    for (g in seq_len(num_groups)) {
-      group_col <- paste0("group", g)
-      if (input$faculty_assign_mode == "room") {
+    faculty <- NULL
+    if (input$faculty_assign_mode == "room") {
+      # By room: one row per station, columns for each group
+      faculty <- data.frame(
+        shortKey = schedule$shortKey,
+        stringsAsFactors = FALSE
+      )
+      for (g in seq_len(num_groups)) {
+        group_col <- paste0("group", g)
         faculty[[group_col]] <- sapply(seq_len(nrow(schedule)), function(i) {
           val <- NULL
           if (!is.null(faculty_assignments$by_room[[as.character(g)]])) {
@@ -2092,15 +2094,32 @@ server <- function(input, output, session) {
           }
           if (is.null(val)) "" else val
         })
-      } else {
-        faculty[[group_col]] <- sapply(seq_len(nrow(schedule)), function(i) {
-          vals <- character(0)
+      }
+    } else {
+      # By student: one row per studentNum in each group
+      faculty <- data.frame(
+        groupNum = character(),
+        studentNum = integer(),
+        faculty = character(),
+        stringsAsFactors = FALSE
+      )
+      for (g in seq_len(num_groups)) {
+        for (s in seq_len(max_students)) {
+          val <- ""
           if (!is.null(faculty_assignments$by_student[[as.character(g)]])) {
-            vals <- unlist(faculty_assignments$by_student[[as.character(g)]])
-            vals <- vals[!is.na(vals) & vals != ""]
+            val <- faculty_assignments$by_student[[as.character(g)]][[as.character(s)]]
+            if (is.null(val)) val <- ""
           }
-          paste(vals, collapse = "; ")
-        })
+          faculty <- rbind(
+            faculty,
+            data.frame(
+              groupNum = as.character(g),
+              studentNum = s,
+              faculty = val,
+              stringsAsFactors = FALSE
+            )
+          )
+        }
       }
     }
 
@@ -2136,6 +2155,7 @@ server <- function(input, output, session) {
   outputOptions(output, "tmpl_student_table", suspendWhenHidden = FALSE)
   outputOptions(output, "tmpl_station_info_ui", suspendWhenHidden = FALSE)
   outputOptions(output, "tmpl_schedule_ui", suspendWhenHidden = FALSE)
+  # outputOptions(output, "faculty_assignment_ui", suspendWhenHidden = FALSE) # gives error when called
 }
 
 shinyApp(ui, server)
