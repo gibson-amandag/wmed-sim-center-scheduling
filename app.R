@@ -144,9 +144,11 @@ get_start_time_label <- function(index, start_time_names) {
 ui <- fluidPage(
   titlePanel("Schedule Generator"),
   helpText("Note: When entering numbers, be careful about scrolling over the input box, as it may change the value."),
-  sidebarLayout(
-    sidebarPanel(
-      width = 3,
+  fluidRow(
+    column(
+      width = 12,
+      class = "col-md-4 col-lg-3",
+      style = "background-color: #f5f5f5; padding: 10px; border-right: 1px solid #ddd;",
       h2("Step 1:"),
       h3("Option (a)"),
       p("Enter the schedule information within the 'Enter Info' tab"),
@@ -163,9 +165,11 @@ ui <- fluidPage(
       p("Download the generated schedules or individual student schedules"),
       downloadButton("download", "Save Schedules to Excel", class = "btn-success", width = "100%"),
       downloadButton("download_students", "Download Individual Student Schedules", class = "btn-info", width = "100%"),
+      
     ),
-    mainPanel(
-      width = 9,
+    column(
+      width = 12,
+      class = "col-md-8 col-lg-9",
       tabsetPanel(
         tabPanel(
           "Enter Info",
@@ -1732,11 +1736,6 @@ server <- function(input, output, session) {
   )
 
   # Store faculty assignment info
-  # --- Faculty Assignment State ---
-  faculty_assignments <- reactiveValues(
-    by_room = list(),   # by_room[[group]][[station]] = faculty name
-    by_student = list() # by_student[[group]][[studentNum]] = faculty name
-  )
   
   # --- Faculty Assignment UI ---
   output$faculty_assignment_ui <- renderUI({
@@ -1744,9 +1743,32 @@ server <- function(input, output, session) {
     num_groups <- input$tmpl_num_groups
     num_stations <- input$tmpl_num_stations
     max_students <- input$tmpl_max_students
-  
+
+    num_starttimes <- input$tmpl_num_starttimes
+
+    # Get start time names from tmpl_inputs
+    start_time_names <- sapply(seq_len(num_starttimes), function(i) {
+      key <- paste0("tmpl_starttime_name_", i)
+      nm <- tmpl_inputs$starttime_names[[key]]
+      if (is.null(nm) || nm == "") paste0("Start", i) else nm
+    })
+
+    update_tmpl_group_info()
     group_panels <- lapply(seq_len(num_groups), function(g) {
       group_label <- paste("Group", g)
+      group_date <- input[[paste0("tmpl_group_", g, "_date")]]
+      group_timeOfDay <- input[[paste0("tmpl_group_", g, "_timeOfDay")]]
+      time_label <- get_start_time_label(group_timeOfDay, start_time_names)
+
+      group_heading <- tags$h4(
+        group_label,
+        if (!is.null(group_date) && !is.na(group_date)) {
+          paste0(" (", format(as.Date(group_date), "%A, %B %d, %Y"),
+                if (!is.null(time_label) && !is.na(time_label)) paste0(", ", time_label) else "",
+                ")")
+        }
+      )
+  
       if (input$faculty_assign_mode == "room") {
         # By room: Table for this group, stations as rows
         station_names <- sapply(seq_len(num_stations), function(i) {
@@ -1802,40 +1824,53 @@ server <- function(input, output, session) {
       }
       tags$div(
         style = "margin-bottom: 32px; border: 1px solid #ccc; border-radius: 6px; padding: 12px;",
-        tags$h4(group_label),
+        group_heading,
         table_ui
       )
     })
   
     tagList(group_panels)
   })
+
+  # --- Faculty Assignment State ---
+  faculty_assignments <- reactiveValues(
+    by_room = list(),   # by_room[[group]][[station]] = faculty name
+    by_student = list() # by_student[[group]][[studentNum]] = faculty name
+  )
+  
+  # --- Faculty Assignment Update Function ---
+  update_faculty_assignments <- function() {
+    isolate({
+      req(input$tmpl_num_groups, input$tmpl_num_stations, input$tmpl_max_students)
+      if (input$faculty_assign_mode == "room") {
+        for (g in seq_len(input$tmpl_num_groups)) {
+          for (i in seq_len(input$tmpl_num_stations)) {
+            inputId <- paste0("faculty_room_", g, "_", i)
+            val <- input[[inputId]]
+            if (!is.null(val)) {
+              if (is.null(faculty_assignments$by_room[[as.character(g)]])) faculty_assignments$by_room[[as.character(g)]] <- list()
+              faculty_assignments$by_room[[as.character(g)]][[as.character(i)]] <- val
+            }
+          }
+        }
+      } else {
+        for (g in seq_len(input$tmpl_num_groups)) {
+          for (s in seq_len(input$tmpl_max_students)) {
+            inputId <- paste0("faculty_student_", g, "_", s)
+            val <- input[[inputId]]
+            if (!is.null(val)) {
+              if (is.null(faculty_assignments$by_student[[as.character(g)]])) faculty_assignments$by_student[[as.character(g)]] <- list()
+              faculty_assignments$by_student[[as.character(g)]][[as.character(s)]] <- val
+            }
+          }
+        }
+      }
+    })
+  }
   
   # --- Faculty Assignment Observers ---
   observe({
-    req(input$tmpl_num_groups, input$tmpl_num_stations, input$tmpl_max_students)
-    if (input$faculty_assign_mode == "room") {
-      for (g in seq_len(input$tmpl_num_groups)) {
-        for (i in seq_len(input$tmpl_num_stations)) {
-          inputId <- paste0("faculty_room_", g, "_", i)
-          val <- input[[inputId]]
-          if (!is.null(val)) {
-            if (is.null(faculty_assignments$by_room[[as.character(g)]])) faculty_assignments$by_room[[as.character(g)]] <- list()
-            faculty_assignments$by_room[[as.character(g)]][[as.character(i)]] <- val
-          }
-        }
-      }
-    } else {
-      for (g in seq_len(input$tmpl_num_groups)) {
-        for (s in seq_len(input$tmpl_max_students)) {
-          inputId <- paste0("faculty_student_", g, "_", s)
-          val <- input[[inputId]]
-          if (!is.null(val)) {
-            if (is.null(faculty_assignments$by_student[[as.character(g)]])) faculty_assignments$by_student[[as.character(g)]] <- list()
-            faculty_assignments$by_student[[as.character(g)]][[as.character(s)]] <- val
-          }
-        }
-      }
-    }
+    update_faculty_assignments()
   })
 
   # --- TEMPLATE CREATOR LOGIC ---
@@ -2004,7 +2039,7 @@ server <- function(input, output, session) {
     }
 
     # faculty: one row per station, one column per group, use station names/keys
-    # Replace your current faculty data.frame logic in template_data() with this:
+    update_faculty_assignments()
     faculty <- data.frame(
       shortKey = schedule$shortKey,
       stringsAsFactors = FALSE
