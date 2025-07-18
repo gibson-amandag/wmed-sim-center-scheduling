@@ -29,22 +29,18 @@ generate_group_schedules <- function(data) {
     values_to = "faculty",
     names_prefix = "group"
   )
-
-  # Ensure groupNum is character for join
   faculty_long$groupNum <- as.character(faculty_long$groupNum)
 
-  for (group in unique(data$studentInfo$groupNum)) {
+  for (group in unique(as.character(data$studentInfo$groupNum))) {
     group_students <- data$studentInfo %>% filter(groupNum == group)
     group_meta <- data$groupInfo %>% filter(groupNum == group)
-    # print(paste("Generating schedule for group", group, "with", nrow(group_meta), "students."))
     if (nrow(group_meta) == 0) next
 
     sched <- data$schedule
     time_blocks <- grep("^TimeBlock", names(sched), value = TRUE)
     tb_info <- data$timeBlockInfo
 
-    # --- Assign faculty for this group using faculty_long ---
-    # Join sched with faculty_long by niceName and groupNum
+    # Assign faculty for this group using faculty_long
     sched_with_faculty <- sched %>%
       left_join(
         faculty_long %>% filter(groupNum == as.character(group)),
@@ -70,21 +66,13 @@ generate_group_schedules <- function(data) {
       })
     }
 
-    # Long version: one row per station/time block (no date/time columns)
-    # print("Group_students:")
-    # print(group_students)
-    # print("Long schedule with faculty:")
-    # print(pivot_longer(
-    #   sched_with_faculty,
-    #   cols = all_of(time_blocks),
-    #   names_to = "timeBlock",
-    #   values_to = "studentNum"
-    # ))
+    # Long version: one row per station/time block
     long_sched <- tidyr::pivot_longer(
       sched_with_faculty,
       cols = all_of(time_blocks),
       names_to = "timeBlock",
-      values_to = "studentNum"
+      values_to = "studentNum",
+      values_transform = list(studentNum = as.integer)
     ) %>%
       left_join(group_students, by = "studentNum") %>%
       left_join(data$fillColor, by = "studentNum") %>%
@@ -96,22 +84,32 @@ generate_group_schedules <- function(data) {
         )
       )
 
-    # Store group-level info and time block times as separate parameters
+    # Get group date and start time label
     group_date <- group_meta$date[1]
-    group_timeOfDay <- if ("timeOfDay" %in% names(group_meta)) group_meta$timeOfDay[1] else NA
+    group_timeOfDay <- group_meta$timeOfDay[1]
 
-    # Find the start time label for this group
-    start_time_label <- group_timeOfDay
-    if (!is.na(start_time_label) && start_time_label %in% names(tb_info)) {
+    # Find the row in timeBlockInfo for this group's start time label
+    tb_row <- which(tb_info$startTimeLabel == group_timeOfDay)
+    if (length(tb_row) == 1) {
       # Get time block times for this start time
-      timeblock_times <- setNames(as.character(tb_info[[start_time_label]]), tb_info$timeBlock)
-      # Get arrival/end time from special rows in timeBlockInfo
-      arrival_row <- which(tb_info$timeBlock == "Participant arrival time")
-      end_row <- which(tb_info$timeBlock == "Participant end time")
-      group_startTime <- if (length(arrival_row) == 1) tb_info[[start_time_label]][arrival_row] else NA
-      group_endTime <- if (length(end_row) == 1) tb_info[[start_time_label]][end_row] else NA
+      timeblock_times <- setNames(
+        lapply(seq_along(time_blocks), function(i) {
+          colname <- paste0("Block", i, "_Start")
+          val <- tb_info[[colname]][tb_row]
+          if (!is.null(val) && !is.na(val)) {
+            h <- floor(val * 24)
+            m <- round((val * 24 - h) * 60)
+            sprintf("%02d:%02d", h, m)
+          } else {
+            NA
+          }
+        }),
+        time_blocks
+      )
+      group_startTime <- tb_info$arrivalTime[tb_row]
+      group_endTime <- tb_info$leaveTime[tb_row]
     } else {
-      timeblock_times <- setNames(rep(NA, length(tb_info$timeBlock)), tb_info$timeBlock)
+      timeblock_times <- setNames(rep(NA, length(time_blocks)), time_blocks)
       group_startTime <- NA
       group_endTime <- NA
     }
@@ -149,11 +147,19 @@ ui <- navbarPage(
           12,
           helpText(
             "Fill out the information below about your event (start times, groups, students, stations, etc.),",
-            "then click the 'Download Template File' button to generate an Excel template for your schedule."
+            "then click the 'Load Info to Build Schedule' button to build the schedule or click 'Download Template File' button to save an excel template."
           ),
+        ),
+        column(
+          6, 
+          actionButton("load_info", "Load Info to Build Schedule")
+        ),
+        column(
+          6, 
           downloadButton("download_template", "Download Template File"),
         ),
       ),
+      br(),
       tabsetPanel(
         tabPanel(
           "Time Information",
@@ -1804,21 +1810,29 @@ server <- function(input, output, session) {
     schedule <- {
       n <- input$tmpl_num_stations
       stations <- tmpl_station_info$stations
-      if (length(stations) != n) {
-        data.frame(
-          shortKey = paste0("S", seq_len(n)),
-          niceName = paste0("Station ", seq_len(n)),
-          timeInMin = "",
-          room1 = "",
-          room2 = "",
-          notes = "",
-          stationColor = "",
-          stringsAsFactors = FALSE
-        )
-      } else {
-        as.data.frame(do.call(rbind, lapply(stations, as.data.frame)), stringsAsFactors = FALSE)
-      }
+      # Ensure all fields are present for each station
+      required_fields <- c("shortKey", "niceName", "timeInMin", "room1", "room2", "notes", "stationColor")
+      stations_filled <- lapply(seq_len(n), function(i) {
+        s <- if (length(stations) >= i && !is.null(stations[[i]])) stations[[i]] else list()
+        # Fill missing fields with defaults
+        for (f in required_fields) {
+          if (is.null(s[[f]])) {
+            s[[f]] <- switch(f,
+              shortKey = paste0("S", i),
+              niceName = paste0("Station ", i),
+              timeInMin = "",
+              room1 = "",
+              room2 = "",
+              notes = "",
+              stationColor = "#FFFFFF"
+            )
+          }
+        }
+        s
+      })
+      as.data.frame(do.call(rbind, lapply(stations_filled, as.data.frame)), stringsAsFactors = FALSE)
     }
+    
     for (i in seq_len(num_timeblocks)) {
       schedule[[paste0("TimeBlock", i)]] <- ""
     }
@@ -1852,6 +1866,19 @@ server <- function(input, output, session) {
       schedule = schedule,
       faculty = faculty
     )
+  })
+
+  observeEvent(input$load_info, {
+    update_tmpl_starttime_names()
+    update_tmpl_group_info()
+    update_tmpl_station_info()
+    tmpl <- template_data()
+    data$studentInfo <- tmpl$studentInfo
+    data$groupInfo <- tmpl$groupInfo
+    data$fillColor <- tmpl$fillColor
+    data$timeBlockInfo <- tmpl$timeBlockInfo
+    data$schedule <- tmpl$schedule
+    data$faculty <- tmpl$faculty
   })
 
   output$download_template <- downloadHandler(
