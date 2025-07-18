@@ -1054,14 +1054,27 @@ server <- function(input, output, session) {
     bordered = TRUE
   )
 
-  output$timeBlockInfo <- renderTable(
-    {
-      req(data$timeBlockInfo)
-      data$timeBlockInfo
-    },
-    striped = TRUE,
-    bordered = TRUE
-  )
+  fraction_to_time <- function(x) {
+    if (is.na(x) || x == "") return("")
+    h <- floor(x * 24)
+    m <- round((x * 24 - h) * 60)
+    if (m == 60) {
+      h <- h + 1
+      m <- 0
+    }
+    sprintf("%02d:%02d", h, m)
+  }
+
+  output$timeBlockInfo <- renderTable({
+    req(data$timeBlockInfo)
+    df <- data$timeBlockInfo
+    # Find columns that are times (arrival, leave, _Start, _End)
+    time_cols <- grep("Time$|_Start$|_End$", names(df), value = TRUE)
+    for (col in time_cols) {
+      df[[col]] <- sapply(df[[col]], fraction_to_time)
+    }
+    df
+  })
 
   output$schedule <- renderUI({
     req(data$schedule, data$fillColor)
