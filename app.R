@@ -22,14 +22,9 @@ load_data <- function(file) {
 generate_group_schedules <- function(data) {
   schedules <- list()
 
-  faculty_long <- pivot_longer(
-    data$faculty,
-    cols = starts_with("group"),
-    names_to = "groupNum",
-    values_to = "faculty",
-    names_prefix = "group"
-  )
-  faculty_long$groupNum <- as.character(faculty_long$groupNum)
+  # Detect faculty assignment mode
+  faculty_by_student <- all(c("groupNum", "studentNum", "faculty") %in% names(data$faculty))
+  faculty_by_room <- any(grepl("^group[0-9]+$", names(data$faculty)))
 
   for (group in unique(as.character(data$studentInfo$groupNum))) {
     group_students <- data$studentInfo %>% filter(groupNum == group)
@@ -40,31 +35,76 @@ generate_group_schedules <- function(data) {
     time_blocks <- grep("^TimeBlock", names(sched), value = TRUE)
     tb_info <- data$timeBlockInfo
 
-    # Assign faculty for this group using faculty_long
-    sched_with_faculty <- sched %>%
-      left_join(
-        faculty_long %>% filter(groupNum == as.character(group)),
-        by = c("shortKey")
-      ) %>%
-      mutate(
-        faculty = ifelse(!is.na(faculty), faculty, ifelse(!is.null(sched$faculty), sched$faculty, NA))
+    if (faculty_by_room) {
+      # --- By room: original logic ---
+      faculty_long <- tidyr::pivot_longer(
+        data$faculty,
+        cols = starts_with("group"),
+        names_to = "groupNum",
+        values_to = "faculty",
+        names_prefix = "group"
       )
+      faculty_long$groupNum <- as.character(faculty_long$groupNum)
+      sched_with_faculty <- sched %>%
+        left_join(
+          faculty_long %>% filter(groupNum == as.character(group)),
+          by = c("shortKey")
+        ) %>%
+        mutate(
+          faculty = ifelse(!is.na(faculty), faculty, ifelse(!is.null(sched$faculty), sched$faculty, NA))
+        )
+      print(head(sched_with_faculty))
+    # } else if (faculty_by_student) {
+    #   # --- By student: join by groupNum and studentNum for each time block ---
+    #   sched_with_faculty <- sched
+    #   for (tb in time_blocks) {
+    #     sched_with_faculty[[paste0(tb, "_faculty")]] <- sapply(sched_with_faculty[[tb]], function(sn) {
+    #       if (is.na(sn) || sn == "") return(NA)
+    #       fac_row <- data$faculty[data$faculty$groupNum == group & data$faculty$studentNum == as.integer(sn), ]
+    #       if (nrow(fac_row) > 0) fac_row$faculty[1] else NA
+    #     })
+    #   }
+    #   # For display, you may want a single 'faculty' column (e.g., for the first time block)
+    #   sched_with_faculty$faculty <- sched_with_faculty[[paste0(time_blocks[1], "_faculty")]]
+
+    #   print(head(sched_with_faculty))
+    } else {
+      # No faculty info
+      sched_with_faculty <- sched
+      sched_with_faculty$faculty <- NA
+    }
 
     # Wide version: replace studentNum with "studentNum. lastName, firstName"
     wide_sched <- sched_with_faculty
     for (tb in time_blocks) {
-      wide_sched[[tb]] <- sapply(wide_sched[[tb]], function(sn) {
+      wide_sched[[tb]] <- sapply(seq_len(nrow(wide_sched)), function(i) {
+        sn <- sched[[tb]][i]
         if (is.na(sn) || sn == "") {
           return("")
         }
         stu <- group_students[group_students$studentNum == sn, ]
-        if (nrow(stu) > 0) {
+        fac <- NULL
+        if (faculty_by_student) {
+          fac_row <- data$faculty[data$faculty$groupNum == group & data$faculty$studentNum == as.integer(sn), ]
+          if (nrow(fac_row) > 0 && !is.na(fac_row$faculty[1]) && fac_row$faculty[1] != "") {
+            fac <- fac_row$faculty[1]
+          }
+        }
+        label <- if (nrow(stu) > 0) {
           paste0(stu$studentNum, ". ", stu$lastName, ", ", stu$firstName)
         } else {
           as.character(sn)
         }
+        if (!is.null(fac)) {
+          paste0(label, " (", fac, ")")
+        } else {
+          label
+        }
       })
     }
+
+    # # Remove *_faculty columns from wide_sched before display/export
+    # wide_sched <- wide_sched[, !grepl("_faculty$", names(wide_sched)), drop = FALSE]
 
     # Long version: one row per station/time block
     long_sched <- tidyr::pivot_longer(
@@ -79,10 +119,25 @@ generate_group_schedules <- function(data) {
       mutate(
         studentLabel = ifelse(
           !is.na(lastName),
-          paste0(studentNum, ". ", lastName, ", ", firstName),
+          ifelse(
+            faculty_by_student & !is.na(faculty) & faculty != "",
+            paste0(studentNum, ". ", lastName, ", ", firstName, " (", faculty, ")"),
+            paste0(studentNum, ". ", lastName, ", ", firstName)
+          ),
           as.character(studentNum)
         )
       )
+
+    # If by student, add faculty for each time block
+    if (faculty_by_student) {
+      long_sched <- long_sched %>%
+        left_join(
+          data$faculty %>% filter(groupNum == group),
+          by = c("groupNum", "studentNum")
+        ) %>%
+        mutate(faculty = faculty.y) %>%
+        select(-faculty.x, -faculty.y)
+    }
 
     # Get group date and start time label
     group_date <- group_meta$date[1]
@@ -125,7 +180,8 @@ generate_group_schedules <- function(data) {
       startTime = group_startTime,
       endTime = group_endTime,
       timeOfDay = group_timeOfDay,
-      timeblock_times = timeblock_times
+      timeblock_times = timeblock_times,
+      faculty_by_student = faculty_by_student
     )
   }
   return(schedules)
@@ -151,9 +207,9 @@ ui <- fluidPage(
       style = "background-color: #f5f5f5; padding: 10px; border-right: 1px solid #ddd;",
       h2("Step 1:"),
       h3("Option (a)"),
-      p("Enter the schedule information within the 'Enter Info' tab"),
+      p("Enter the schedule information within the 'Enter Info' and 'Station Assignments' tabs"),
       h3("Option (b)"),
-      p("Upload an existing Excel template and then edit within the Enter Info tab as desired"),
+      p("Upload an existing Excel template and then edit within the Enter Info and Station Assignments tab as desired"),
       fileInput("file", "Upload Template", accept = ".xlsx", width = "100%"),
       h2("Step 2:"),
       p("Click the button below to load the entered information and generate schedules"),
@@ -258,29 +314,10 @@ ui <- fluidPage(
                 column(6, p("How many stations are there in the schedule?")),
                 column(6, numericInput("tmpl_num_stations", "# of stations", 6, min = 1))
               ),
-              tabsetPanel(
-                tabPanel(
-                  "Station Names",
-                  fluidRow(
-                    column(12,
-                      p("Note that 'short key' is used to match stations within the code. These must all be unique. You likely don't need to change these"),
-                      uiOutput("tmpl_station_info_ui")
-                    )
-                  )
-                ),
-                tabPanel(
-                  "Station Assignments",
-                  fluidRow(
-                    column(
-                      12,
-                      h3("Assign students to stations"),
-                      p("For stations that are longer than one time block, assign the same student number back-to-back."),
-                      p("Leave a station blank if there's a break"),
-                      actionButton("tmpl_clear_assignments", "Clear All Assignments", icon = icon("eraser"), class = "btn-warning"),
-                      uiOutput("tmpl_schedule_warning_ui"),
-                      uiOutput("tmpl_schedule_ui")
-                    )
-                  )
+              fluidRow(
+                column(12,
+                  p("Note that 'short key' is used to match stations within the code. These must all be unique. You likely don't need to change these"),
+                  uiOutput("tmpl_station_info_ui")
                 )
               )
             ),
@@ -299,7 +336,26 @@ ui <- fluidPage(
                   )
                 )
               ),
+              fluidRow(
+                column(
+                  12, h3("Faculty Assignments")
+                )
+              ),
               uiOutput("faculty_assignment_ui")
+            )
+          )
+        ),
+        tabPanel(
+          "Station Assignments",
+          fluidRow(
+            column(
+              12,
+              h3("Assign students to stations"),
+              p("For stations that are longer than one time block, assign the same student number back-to-back."),
+              p("Leave a station blank if there's a break"),
+              actionButton("tmpl_clear_assignments", "Clear All Assignments", icon = icon("eraser"), class = "btn-warning"),
+              uiOutput("tmpl_schedule_warning_ui"),
+              uiOutput("tmpl_schedule_ui")
             )
           )
         ),
@@ -2137,6 +2193,7 @@ server <- function(input, output, session) {
     update_tmpl_starttime_names()
     update_tmpl_group_info()
     update_tmpl_station_info()
+    update_faculty_assignments()
     tmpl <- template_data()
     data$studentInfo <- tmpl$studentInfo
     data$groupInfo <- tmpl$groupInfo
