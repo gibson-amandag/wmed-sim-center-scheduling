@@ -37,13 +37,16 @@ generate_group_schedules <- function(data) {
 
     if (faculty_by_room) {
       # --- By room: original logic ---
-      faculty_long <- tidyr::pivot_longer(
-        data$faculty,
-        cols = starts_with("group"),
-        names_to = "groupNum",
-        values_to = "faculty",
-        names_prefix = "group"
-      )
+      # Ensure all group columns are character before pivoting
+      data$faculty <- data$faculty %>%
+        mutate(across(starts_with("group"), as.character))
+      faculty_long <- data$faculty %>%
+        pivot_longer(
+          cols = starts_with("group"),
+          names_to = "groupNum",
+          values_to = "faculty",
+          names_prefix = "group"
+        )
       faculty_long$groupNum <- as.character(faculty_long$groupNum)
       sched_with_faculty <- sched %>%
         left_join(
@@ -53,7 +56,6 @@ generate_group_schedules <- function(data) {
         mutate(
           faculty = ifelse(!is.na(faculty), faculty, ifelse(!is.null(sched$faculty), sched$faculty, NA))
         )
-      print(head(sched_with_faculty))
     } else {
       # No faculty info
       sched_with_faculty <- sched
@@ -196,6 +198,10 @@ ui <- fluidPage(
       fileInput("file", "Upload Template", accept = ".xlsx", width = "100%"),
       h2("Step 2:"),
       p("Click the button below to load the entered information and generate schedules"),
+      p(
+        "Be sure to click this button again if you make any changes to the schedule information",
+        style = "color: blue;"
+      ),
       actionButton("load_info", "Generate Schedules", icon = icon("cogs"), class = "btn-primary", width = "100%"),
       h2("Step 3:"),
       p("View the generated room schedules in the 'Generated Schedules' tab or look at the student schedules in the 'Student Schedule' tab"),
@@ -203,6 +209,7 @@ ui <- fluidPage(
       h2("Step 4:"),
       p("Download the generated schedules or individual student schedules"),
       downloadButton("download", "Save Schedules to Excel", class = "btn-success", width = "100%"),
+      hr(),
       downloadButton("download_students", "Download Individual Student Schedules", class = "btn-info", width = "100%"),
       
     ),
@@ -637,7 +644,7 @@ server <- function(input, output, session) {
       fluidRow(
         lapply(seq_len(n), function(i) {
           key <- paste0("tmpl_student_color_", i)
-          val <- input[[key]]
+          val <- isolate(input[[key]])
           default_val <- if (!is.null(val)) val else default_colors[(i - 1) %% length(default_colors) + 1]
           column(
             4,
@@ -1567,13 +1574,14 @@ server <- function(input, output, session) {
         tags$p(tags$b("End time:"), format(strptime(format(as_hms(as.numeric(group_end) * 86400)), "%H:%M:%S"), "%I:%M %p"))
       ),
       tags$table(
+        id = "student_schedule_table",  # <-- Added ID here
         style = "border-collapse:collapse;width:100%;margin:auto;",
         tags$thead(header),
         tags$tbody(rows)
       ) %>%
         tagAppendChild(
           tags$style(HTML("
-            table tr th, table tr td {
+            #student_schedule_table tr th, #student_schedule_table tr td {
               border: 1px solid #333 !important;
               padding: 8px 12px !important;
             }
@@ -2053,7 +2061,7 @@ server <- function(input, output, session) {
       studentNum = seq_len(max_students),
       code = sapply(seq_len(max_students), function(i) {
         key <- paste0("tmpl_student_color_", i)
-        val <- input[[key]]
+        val <- isolate(input[[key]])
         if (is.null(val) || val == "") "#FFFFFF" else val
       }),
       stringsAsFactors = FALSE
