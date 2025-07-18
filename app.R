@@ -99,6 +99,10 @@ generate_group_schedules <- function(data) {
           if (!is.null(val) && !is.na(val)) {
             h <- floor(val * 24)
             m <- round((val * 24 - h) * 60)
+            if (m == 60) {
+              h <- h + 1
+              m <- 0
+            }
             sprintf("%02d:%02d", h, m)
           } else {
             NA
@@ -288,7 +292,7 @@ ui <- navbarPage(
             tabPanel("Group Info", tableOutput("groupInfo")),
             tabPanel("Time Blocks", tableOutput("timeBlockInfo")),
             tabPanel("Schedule Template", uiOutput("schedule")),
-            # --- NEW TAB ---
+            tabPanel("Raw Schedule Table", tableOutput("raw_schedule_table"))
           )
         )
       )
@@ -298,6 +302,11 @@ ui <- navbarPage(
 
 # Server
 server <- function(input, output, session) {
+  output$raw_schedule_table <- renderTable({
+    req(data$schedule)
+    data$schedule
+  })
+
   data <- reactiveValues()
 
   # --- NEW: Store template labels/times in reactiveValues ---
@@ -1322,13 +1331,14 @@ server <- function(input, output, session) {
         tagList(
           date_header,
           tags$table(
+            id = "group_schedule_table",
             style = "border-collapse:collapse;width:100%;margin:auto;",
             tags$thead(header),
             tags$tbody(rows)
           ) %>%
             tagAppendChild(
               tags$style(HTML("
-                table tr th, table tr td {
+                #group_schedule_table tr th, #group_schedule_table tr td {
                   border: 1px solid #333 !important;
                   padding: 8px 12px !important;
                 }
@@ -1832,7 +1842,7 @@ server <- function(input, output, session) {
       })
       as.data.frame(do.call(rbind, lapply(stations_filled, as.data.frame)), stringsAsFactors = FALSE)
     }
-    
+
     for (i in seq_len(num_timeblocks)) {
       schedule[[paste0("TimeBlock", i)]] <- ""
     }
@@ -1850,7 +1860,6 @@ server <- function(input, output, session) {
 
     # faculty: one row per station, one column per group, use station names/keys
     faculty <- data.frame(
-      niceName = schedule$niceName,
       shortKey = schedule$shortKey,
       stringsAsFactors = FALSE
     )
