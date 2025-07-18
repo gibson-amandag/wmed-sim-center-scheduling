@@ -1526,6 +1526,44 @@ server <- function(input, output, session) {
     },
     content = function(file) {
       wb <- createWorkbook()
+
+      # --- Add template sheets first ---
+      tmpl <- template_data()
+      addWorksheet(wb, "studentInfo")
+      writeData(wb, "studentInfo", tmpl$studentInfo)
+      addWorksheet(wb, "groupInfo")
+      writeData(wb, "groupInfo", tmpl$groupInfo)
+      addWorksheet(wb, "fillColor")
+      writeData(wb, "fillColor", tmpl$fillColor)
+      # Color the fillColor cells
+      for (i in seq_len(nrow(tmpl$fillColor))) {
+        color <- tmpl$fillColor$code[i]
+        if (!is.null(color) && color != "") {
+          addStyle(
+            wb, "fillColor",
+            createStyle(fgFill = color),
+            rows = i + 1, # +1 for header row
+            cols = 2, # 'code' column is column 2
+            gridExpand = TRUE,
+            stack = TRUE
+          )
+        }
+      }
+      addWorksheet(wb, "timeBlockInfo")
+      writeData(wb, "timeBlockInfo", tmpl$timeBlockInfo)
+      time_style <- createStyle(numFmt = "hh:mm")
+      time_cols <- which(grepl("Time$|_Start$|_End$", names(tmpl$timeBlockInfo)))
+      addStyle(
+        wb, "timeBlockInfo", time_style,
+        rows = 2:(nrow(tmpl$timeBlockInfo) + 1),
+        cols = time_cols,
+        gridExpand = TRUE, stack = TRUE
+      )
+      addWorksheet(wb, "schedule")
+      writeData(wb, "schedule", tmpl$schedule)
+      addWorksheet(wb, "faculty")
+      writeData(wb, "faculty", tmpl$faculty)
+
       for (name in names(data$schedules)) {
         sched <- data$schedules[[name]]
         ws_name <- substr(name, 1, 31) # Excel sheet name limit
@@ -2088,56 +2126,6 @@ server <- function(input, output, session) {
     data$schedule <- tmpl$schedule
     data$faculty <- tmpl$faculty
   })
-
-  output$download_template <- downloadHandler(
-    filename = function() {
-      "Blank_Schedule_Template.xlsx"
-    },
-    content = function(file) {
-      update_tmpl_starttime_names()
-      update_tmpl_group_info()
-      update_tmpl_station_info()
-
-      tmpl <- template_data()
-      wb <- createWorkbook()
-      addWorksheet(wb, "studentInfo")
-      writeData(wb, "studentInfo", tmpl$studentInfo)
-      addWorksheet(wb, "groupInfo")
-      writeData(wb, "groupInfo", tmpl$groupInfo)
-      addWorksheet(wb, "fillColor")
-      writeData(wb, "fillColor", tmpl$fillColor)
-      # Color the fillColor cells
-      for (i in seq_len(nrow(tmpl$fillColor))) {
-        color <- tmpl$fillColor$code[i]
-        if (!is.null(color) && color != "") {
-          addStyle(
-            wb, "fillColor",
-            createStyle(fgFill = color),
-            rows = i + 1, # +1 for header row
-            cols = 2, # 'code' column is column 2
-            gridExpand = TRUE,
-            stack = TRUE
-          )
-        }
-      }
-      addWorksheet(wb, "timeBlockInfo")
-      writeData(wb, "timeBlockInfo", tmpl$timeBlockInfo)
-      time_style <- createStyle(numFmt = "hh:mm")
-      # Find all columns that are times
-      time_cols <- which(grepl("Time$|_Start$|_End$", names(tmpl$timeBlockInfo)))
-      addStyle(
-        wb, "timeBlockInfo", time_style,
-        rows = 2:(nrow(tmpl$timeBlockInfo) + 1),
-        cols = time_cols,
-        gridExpand = TRUE, stack = TRUE
-      )
-      addWorksheet(wb, "schedule")
-      writeData(wb, "schedule", tmpl$schedule)
-      addWorksheet(wb, "faculty")
-      writeData(wb, "faculty", tmpl$faculty)
-      saveWorkbook(wb, file, overwrite = TRUE)
-    }
-  )
 
   # this ensures that the UI elements for the template creator are always active, including when the tab hasn't been clicked yet
   outputOptions(output, "tmpl_starttime_names_ui", suspendWhenHidden = FALSE)
