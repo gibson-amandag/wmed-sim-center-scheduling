@@ -54,20 +54,6 @@ generate_group_schedules <- function(data) {
           faculty = ifelse(!is.na(faculty), faculty, ifelse(!is.null(sched$faculty), sched$faculty, NA))
         )
       print(head(sched_with_faculty))
-    # } else if (faculty_by_student) {
-    #   # --- By student: join by groupNum and studentNum for each time block ---
-    #   sched_with_faculty <- sched
-    #   for (tb in time_blocks) {
-    #     sched_with_faculty[[paste0(tb, "_faculty")]] <- sapply(sched_with_faculty[[tb]], function(sn) {
-    #       if (is.na(sn) || sn == "") return(NA)
-    #       fac_row <- data$faculty[data$faculty$groupNum == group & data$faculty$studentNum == as.integer(sn), ]
-    #       if (nrow(fac_row) > 0) fac_row$faculty[1] else NA
-    #     })
-    #   }
-    #   # For display, you may want a single 'faculty' column (e.g., for the first time block)
-    #   sched_with_faculty$faculty <- sched_with_faculty[[paste0(time_blocks[1], "_faculty")]]
-
-    #   print(head(sched_with_faculty))
     } else {
       # No faculty info
       sched_with_faculty <- sched
@@ -102,9 +88,6 @@ generate_group_schedules <- function(data) {
         }
       })
     }
-
-    # # Remove *_faculty columns from wide_sched before display/export
-    # wide_sched <- wide_sched[, !grepl("_faculty$", names(wide_sched)), drop = FALSE]
 
     # Long version: one row per station/time block
     long_sched <- tidyr::pivot_longer(
@@ -368,11 +351,16 @@ ui <- fluidPage(
           selectInput("student_select", "Select Student", choices = NULL),
           uiOutput("student_schedule_table")
         ),
-        tabPanel("Student Info", tableOutput("studentInfo")),
-        tabPanel("Group Info", tableOutput("groupInfo")),
-        tabPanel("Time Blocks", tableOutput("timeBlockInfo")),
-        tabPanel("Schedule Template", uiOutput("schedule")),
-        tabPanel("Raw Schedule Table", tableOutput("raw_schedule_table"))
+        tabPanel(
+          "Review data",
+          tabsetPanel(
+            tabPanel("Schedule Template", uiOutput("schedule")),
+            tabPanel("Student Info", tableOutput("studentInfo")),
+            tabPanel("Group Info", tableOutput("groupInfo")),
+            tabPanel("Time Blocks", tableOutput("timeBlockInfo")),
+            tabPanel("Faculty Info", tableOutput("facultyInfo"))
+          )
+        )
       )
     )
   )
@@ -1123,6 +1111,16 @@ server <- function(input, output, session) {
     bordered = TRUE
   )
 
+  output$facultyInfo <- renderTable(
+    {
+      req(data$faculty)
+      df <- data$faculty
+      df
+    },
+    striped = TRUE,
+    bordered = TRUE
+  )
+
   output$groupInfo <- renderTable(
     {
       req(data$groupInfo)
@@ -1157,7 +1155,10 @@ server <- function(input, output, session) {
       df[[col]] <- sapply(df[[col]], fraction_to_time)
     }
     df
-  })
+  },
+    striped = TRUE,
+    bordered = TRUE
+  )
 
   output$schedule <- renderUI({
     req(data$schedule, data$fillColor)
@@ -1260,17 +1261,18 @@ server <- function(input, output, session) {
     })
 
     tags$table(
+      id = "schedule_template_table",
       style = "border-collapse:collapse;width:100%;",
       tags$thead(header),
       tags$tbody(rows)
     ) %>%
       tagAppendChild(
         tags$style(HTML("
-        table tr th, table tr td {
-        border: 1px solid #333 !important;
-        padding: 8px 12px !important;
-        }
-      "))
+          #schedule_template_table tr th, #schedule_template_table tr td {
+            border: 1px solid #333 !important;
+            padding: 8px 12px !important;
+          }
+        "))
       )
   })
 
@@ -1499,7 +1501,12 @@ server <- function(input, output, session) {
     # Get all time blocks for this group
     long_sched <- sched$long
     student_sched <- long_sched %>%
-      filter(studentNum == studentNum, lastName == !!lastName, firstName == !!firstName, groupNum == !!groupNum) %>%
+      filter(
+        studentNum == !!studentNum,
+        lastName == !!lastName,
+        firstName == !!firstName,
+        groupNum == !!groupNum
+      ) %>%
       arrange(timeBlock)
 
     # If no schedule, return
@@ -1759,7 +1766,12 @@ server <- function(input, output, session) {
           # Get this student's schedule
           long_sched <- sched$long
           student_sched <- long_sched %>%
-            filter(studentNum == studentNum, lastName == !!lastName, firstName == !!firstName, groupNum == !!groupNum) %>%
+            filter(
+              studentNum == !!studentNum,
+              lastName == !!lastName,
+              firstName == !!firstName,
+              groupNum == !!groupNum
+            ) %>%
             arrange(timeBlock)
 
           # --- SKIP if student_sched is empty ---
