@@ -231,6 +231,7 @@ ui <- fluidPage(
                 ),
                 column(6, numericInput("tmpl_num_starttimes", "# of start times", 2, min = 1))
               ),
+              actionButton("test_update_time", "Test Update Arrival 1", class = "btn-info"),
               uiOutput("tmpl_starttime_names_ui"),
               fluidRow(
                 column(12, h3("Time block information")),
@@ -473,6 +474,7 @@ server <- function(input, output, session) {
           endTime = if (!is.null(endTime)) endTime else "",
           timeOfDay = if (!is.null(timeOfDay)) timeOfDay else NA
         )
+        print(paste("Updated group", i, ":", tmpl_group_info$groups[[i]]$groupNum))
       }
       # Remove extra if n decreased
       if (length(tmpl_group_info$groups) > n) {
@@ -598,10 +600,27 @@ server <- function(input, output, session) {
     # Create named vector: values = index, names = label
     time_of_day_choices <- setNames(as.character(seq_along(start_time_names)), start_time_names)
     isolate({
-      tagList(
+      groupUI <-tagList(
         lapply(seq_len(n), function(i) {
           prefix <- paste0("tmpl_group_", i, "_")
           group <- tmpl_group_info$groups[[i]]
+          print(
+            paste(
+              "Rendering group", 
+              i, 
+              "with data:", 
+              if (!is.null(group)) {
+                paste0(
+                  "groupNum: ", group$groupNum, 
+                  ", date: ", group$date, 
+                  ", startTime: ", group$startTime, 
+                  ", endTime: ", group$endTime, 
+                  ", timeOfDay: ", group$timeOfDay)
+              } else {
+                "No data"
+              }
+            )
+          )
           groupNum_val <- if (!is.null(group) && !is.null(group$groupNum)) group$groupNum else paste0("Group ", i)
           date_val <- if (!is.null(group) && !is.null(group$date)) group$date else NULL
           startTime_val <- if (!is.null(group) && !is.null(group$startTime)) group$startTime else ""
@@ -612,10 +631,6 @@ server <- function(input, output, session) {
           } else {
             as.character(i)
           }
-          # print(
-          #   str(timeOfDay_val),
-          #   str(get_start_time_label(timeOfDay_val, start_time_names))
-          # )
           fluidRow(
             column(4, textInput(paste0(prefix, "groupNum"), paste0("Group ", i, " Name"), value = groupNum_val)),
             column(4, dateInput(paste0(prefix, "date"), "Date", value = if (!is.null(date_val)) date_val else NULL)),
@@ -624,6 +639,10 @@ server <- function(input, output, session) {
         })
       )
     })
+    # update tmpl_group_info$groups to reflect the current state
+    # update_tmpl_group_info()
+    # print("Updated tmpl_group_info$groups:", str(tmpl_group_info$groups))
+    groupUI
   })
 
   # --- UI for student color pickers ---
@@ -1095,6 +1114,16 @@ server <- function(input, output, session) {
     }
   })
 
+    # --- Add to your server function ---
+  observeEvent(input$test_update_time, {
+    # Example: set to 06:30
+    test_time <- strptime("06:30", "%H:%M")
+    updateTimeInput(session, "tmpl_arrival_1", value = test_time)
+    showNotification("Updated tmpl_arrival_1 to 06:30", type = "message")
+    updateTextInput(session, "tmpl_starttime_name_1", value = "Morning Start")
+    updateNumericInput(session, "tmpl_num_starttimes", value = 3)
+  })
+
   observeEvent(input$file, {
     req(input$file)
     tables <- load_data(input$file$datapath)
@@ -1104,6 +1133,172 @@ server <- function(input, output, session) {
     data$timeBlockInfo <- tables$timeBlockInfo
     data$schedule <- tables$schedule
     data$faculty <- tables$faculty
+  
+    # --- 1. GROUPS ---
+    n_groups <- nrow(tables$groupInfo)
+    # --- Update tmpl_group_info reactive values ---
+    tmpl_group_info$groups <- lapply(seq_len(n_groups), function(i) {
+      group <- tables$groupInfo[i, ]
+      st_names <- tables$timeBlockInfo$startTimeLabel
+      time_idx <- which(st_names == group$timeOfDay)
+      list(
+        groupNum = as.character(group$groupNum),
+        date = as.Date(group$date),
+        startTime = "",   # If you have startTime/endTime columns, fill here
+        endTime = "",
+        timeOfDay = if (length(time_idx) == 1) as.character(time_idx) else NA
+      )
+    })
+    updateNumericInput(session, "tmpl_num_groups", value = n_groups)
+    for (i in seq_len(n_groups)) {
+      group <- tables$groupInfo[i, ]
+      updateTextInput(session, paste0("tmpl_group_", i, "_groupNum"), value = group$groupNum)
+      updateDateInput(session, paste0("tmpl_group_", i, "_date"), value = as.Date(group$date))
+      # Find index of timeOfDay label in start time names
+      st_names <- tables$timeBlockInfo$startTimeLabel
+      time_idx <- which(st_names == group$timeOfDay)
+      if (length(time_idx) == 1) {
+        updateSelectInput(session, paste0("tmpl_group_", i, "_timeOfDay"), selected = as.character(time_idx))
+      }
+    }
+  
+    # --- 2. STUDENTS ---
+    n_students <- nrow(tables$studentInfo)
+    updateNumericInput(session, "tmpl_total_students", value = n_students)
+    # Guess max students per group
+    max_students <- max(table(tables$studentInfo$groupNum))
+    updateNumericInput(session, "tmpl_max_students", value = max_students)
+    # Set student table
+    tmpl_students(tables$studentInfo[, c("lastName", "firstName", "groupNum", "studentNum")])
+  
+    # --- 3. STUDENT COLORS ---
+    for (i in seq_len(nrow(tables$fillColor))) {
+      updateColourInput(session, paste0("tmpl_student_color_", tables$fillColor$studentNum[i]), value = tables$fillColor$code[i])
+    }
+  
+    # --- 4. START TIMES & TIME BLOCKS ---
+    n_current_starts <- isolate(input$tmpl_num_starttimes)
+    n_new_starts <- nrow(tables$timeBlockInfo)
+    n_timeblocks <- sum(grepl("_Start$", names(tables$timeBlockInfo)))
+    updateNumericInput(session, "tmpl_num_timeblocks", value = n_timeblocks)
+    
+    fraction_to_posix <- function(frac) {
+      if (is.na(frac) || frac == "") return(NULL)
+      h <- floor(frac * 24)
+      m <- round((frac * 24 - h) * 60)
+      strptime(sprintf("%02d:%02d", h, m), "%H:%M")
+    }
+    
+    for(i in seq_len(min(n_current_starts, n_new_starts))) {
+      # Set start time label
+      updateTextInput(session, paste0("tmpl_starttime_name_", i), value = tables$timeBlockInfo$startTimeLabel[i])
+      # Set arrival and end times
+      updateTimeInput(session, paste0("tmpl_arrival_", i), value = fraction_to_posix(tables$timeBlockInfo$arrivalTime[i]))
+      updateTimeInput(session, paste0("tmpl_end_", i), value = fraction_to_posix(tables$timeBlockInfo$leaveTime[i]))
+    
+      # --- Add time block start/end times ---
+      block_cols <- grep("^Block[0-9]+_Start$", names(tables$timeBlockInfo), value = TRUE)
+      for (j in seq_along(block_cols)) {
+        start_col <- paste0("Block", j, "_Start")
+        end_col <- paste0("Block", j, "_End")
+        start_val <- tables$timeBlockInfo[[start_col]][i]
+        end_val <- tables$timeBlockInfo[[end_col]][i]
+        updateTimeInput(session, paste0("tmpl_timeblock_", i, "_", j, "_start"), value = fraction_to_posix(start_val))
+        updateTimeInput(session, paste0("tmpl_timeblock_", i, "_", j, "_end"), value = fraction_to_posix(end_val))
+      }
+    }
+    
+    # update the number of start times
+    updateNumericInput(session, "tmpl_num_starttimes", value = n_new_starts)
+    
+    # If there are more new starts than current, update the text, time, and time block inputs
+    if (n_new_starts > n_current_starts) {
+      for (i in (n_current_starts + 1):n_new_starts) {
+        updateTextInput(session, paste0("tmpl_starttime_name_", i), value = tables$timeBlockInfo$startTimeLabel[i])
+        updateTimeInput(session, paste0("tmpl_arrival_", i), value = fraction_to_posix(tables$timeBlockInfo$arrivalTime[i]))
+        updateTimeInput(session, paste0("tmpl_end_", i), value = fraction_to_posix(tables$timeBlockInfo$leaveTime[i]))
+        # --- Add time block start/end times for new start times ---
+        block_cols <- grep("^Block[0-9]+_Start$", names(tables$timeBlockInfo), value = TRUE)
+        for (j in seq_along(block_cols)) {
+          start_col <- paste0("Block", j, "_Start")
+          end_col <- paste0("Block", j, "_End")
+          start_val <- tables$timeBlockInfo[[start_col]][i]
+          end_val <- tables$timeBlockInfo[[end_col]][i]
+          updateTimeInput(session, paste0("tmpl_timeblock_", i, "_", j, "_start"), value = fraction_to_posix(start_val))
+          updateTimeInput(session, paste0("tmpl_timeblock_", i, "_", j, "_end"), value = fraction_to_posix(end_val))
+        }
+      }
+    }
+
+    # --- 5. STATIONS ---
+    n_stations <- nrow(tables$schedule)
+    updateNumericInput(session, "tmpl_num_stations", value = n_stations)
+    for (i in seq_len(n_stations)) {
+      row <- tables$schedule[i, ]
+      updateTextInput(session, paste0("tmpl_station_", i, "_shortKey"), value = row$shortKey)
+      updateTextInput(session, paste0("tmpl_station_", i, "_niceName"), value = row$niceName)
+      updateNumericInput(session, paste0("tmpl_station_", i, "_timeInMin"), value = row$timeInMin)
+      updateTextInput(session, paste0("tmpl_station_", i, "_room1"), value = row$room1)
+      updateTextInput(session, paste0("tmpl_station_", i, "_room2"), value = row$room2)
+      updateTextInput(session, paste0("tmpl_station_", i, "_notes"), value = row$notes)
+      updateColourInput(session, paste0("tmpl_station_", i, "_stationColor"), value = row$stationColor)
+      # Assignments for each time block
+      tb_cols <- grep("^TimeBlock", names(row), value = TRUE)
+      for (j in seq_along(tb_cols)) {
+        updateSelectInput(session, paste0("sched_", i, "_", j), selected = as.character(row[[tb_cols[j]]]))
+      }
+    }
+
+    tmpl_station_info$stations <- lapply(seq_len(n_stations), function(i) {
+      row <- tables$schedule[i, ]
+      list(
+        shortKey = row$shortKey,
+        niceName = row$niceName,
+        timeInMin = row$timeInMin,
+        room1 = row$room1,
+        room2 = row$room2,
+        notes = row$notes,
+        stationColor = row$stationColor
+      )
+    })
+  
+    # --- 6. FACULTY ASSIGNMENTS ---
+    # Detect mode: by room or by student
+    faculty_by_student <- all(c("groupNum", "studentNum", "faculty") %in% names(tables$faculty))
+    faculty_by_room <- any(grepl("^group[0-9]+$", names(tables$faculty)))
+    print("Faculty assignments mode:")
+    print(paste("By student:", faculty_by_student))
+    print(paste("By room:", faculty_by_room))
+    print(head(tables$faculty))
+    # Set radio button
+    if (faculty_by_student) {
+      updateRadioButtons(session, "faculty_assign_mode", selected = "student")
+      faculty_assignments$by_student <- list()
+      for (g in seq_len(n_groups)) {
+        for (s in seq_len(max_students)) {
+          fac_row <- tables$faculty[
+            tables$faculty$groupNum == as.character(g) & tables$faculty$studentNum == s, ]
+          val <- if (nrow(fac_row) > 0) fac_row$faculty[1] else ""
+          # Update both the input and the reactiveValues
+          updateTextInput(session, paste0("faculty_student_", g, "_", s), value = val)
+          if (is.null(faculty_assignments$by_student[[as.character(g)]])) faculty_assignments$by_student[[as.character(g)]] <- list()
+          faculty_assignments$by_student[[as.character(g)]][[as.character(s)]] <- val
+        }
+      }
+    } else if (faculty_by_room) {
+      updateRadioButtons(session, "faculty_assign_mode", selected = "room")
+      faculty_assignments$by_room <- list()
+      for (g in seq_len(n_groups)) {
+        group_col <- paste0("group", g)
+        for (i in seq_len(n_stations)) {
+          val <- if (group_col %in% names(tables$faculty)) tables$faculty[[group_col]][i] else ""
+          updateTextInput(session, paste0("faculty_room_", g, "_", i), value = val)
+          if (is.null(faculty_assignments$by_room[[as.character(g)]])) faculty_assignments$by_room[[as.character(g)]] <- list()
+          faculty_assignments$by_room[[as.character(g)]][[as.character(i)]] <- val
+        }
+      }
+    }
+  
   })
 
   output$studentInfo <- renderTable(
