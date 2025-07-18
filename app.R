@@ -141,160 +141,153 @@ get_start_time_label <- function(index, start_time_names) {
 }
 
 # UI
-ui <- navbarPage(
-  title = "Schedule Generator",
-  tabPanel(
-    "Enter Info",
-    fluidPage(
-      fluidRow(
-        column(
-          12,
-          helpText(
-            "Fill out the information below about your event (start times, groups, students, stations, etc.),",
-            "then click the 'Load Info to Build Schedule' button to build the schedule or click 'Download Template File' button to save an excel template."
-          ),
-        ),
-        column(
-          6, 
-          actionButton("load_info", "Load Info to Build Schedule")
-        ),
-        column(
-          6, 
-          downloadButton("download_template", "Download Template File"),
-        ),
-      ),
-      br(),
+ui <- fluidPage(
+  titlePanel("Schedule Generator"),
+  sidebarLayout(
+    sidebarPanel(
+      width = 3,
+      h2("Step 1:"),
+      h3("Option (a)"),
+      p("Enter the schedule information within the 'Enter Info' tab"),
+      h3("Option (b)"),
+      p("Upload an existing Excel template and then edit within the Enter Info tab as desired"),
+      fileInput("file", "Upload Template", accept = ".xlsx", width = "100%"),
+      h2("Step 2:"),
+      p("Click the button below to load the entered information and generate schedules"),
+      actionButton("load_info", "Generate Schedules", icon = icon("cogs"), class = "btn-primary", width = "100%"),
+      h2("Step 3:"),
+      p("View the generated room schedules in the 'Generated Schedules' tab or look at the student schedules in the 'Student Schedule' tab"),
+      p("You can also review the entered information in table form in the other tabs"),
+      h2("Step 4:"),
+      p("Download the generated schedules or individual student schedules"),
+      downloadButton("download", "Save Schedules to Excel", class = "btn-success", width = "100%"),
+      downloadButton("download_students", "Download Individual Student Schedules", class = "btn-info", width = "100%"),
+    ),
+    mainPanel(
+      width = 9,
       tabsetPanel(
         tabPanel(
-          "Time Information",
-          fluidRow(
-            column(12, h3("Start Time Information")),
-            column(
-              6, p("How many start times are there in the schedule?"),
-              em("You might have different start times for different groups, e.g. AM/PM")
+          "Enter Info",
+          br(),
+          tabsetPanel(
+            tabPanel(
+              "Time Information",
+              fluidRow(
+                column(12, h3("Start Time Information")),
+                column(
+                  6, p("How many start times are there in the schedule?"),
+                  em("You might have different start times for different groups, e.g. AM/PM")
+                ),
+                column(6, numericInput("tmpl_num_starttimes", "# of start times", 2, min = 1))
+              ),
+              uiOutput("tmpl_starttime_names_ui"),
+              fluidRow(
+                column(12, h3("Time block information")),
+                column(
+                  6,
+                  p("How many time blocks are there in the schedule?"),
+                  em("This is the number of time slots for each station, and it can include breaks")
+                ),
+                column(6, numericInput("tmpl_num_timeblocks", "# of time blocks", 6, min = 1))
+              ),
+              uiOutput("tmpl_timeblock_times_ui")
             ),
-            column(6, numericInput("tmpl_num_starttimes", "# of start times", 2, min = 1))
-          ),
-          uiOutput("tmpl_starttime_names_ui"),
-          fluidRow(
-            column(12, h3("Time block information")),
-            column(
-              6,
-              p("How many time blocks are there in the schedule?"),
-              em("This is the number of time slots for each station, and it can include breaks")
+            tabPanel(
+              "Group Information",
+              fluidRow(
+                column(12, h3("Group information")),
+                column(6, p("How many groups of students are you scheduling?")),
+                column(6, numericInput("tmpl_num_groups", "# of groups", 2, min = 1))
+              ),
+              uiOutput("tmpl_group_info_ui"),
+              fluidRow(
+                column(6, p("What is the maximum number of students per group?")),
+                column(6, numericInput("tmpl_max_students", "Max # of students/group", 6, min = 1))
+              ),
+              uiOutput("tmpl_student_colors_ui")
             ),
-            column(6, numericInput("tmpl_num_timeblocks", "# of time blocks", 6, min = 1))
-          ),
-          uiOutput("tmpl_timeblock_times_ui"),
-        ),
-        tabPanel(
-          "Group Information",
-          fluidRow(
-            column(12, h3("Group information")),
-            column(6, p("How many groups of students are you scheduling?")),
-            column(6, numericInput("tmpl_num_groups", "# of groups", 2, min = 1))
-          ),
-          uiOutput("tmpl_group_info_ui"),
-          fluidRow(
-            column(6, p("What is the maximum number of students per group?")),
-            column(6, numericInput("tmpl_max_students", "Max # of students/group", 6, min = 1))
-          ),
-          uiOutput("tmpl_student_colors_ui")
-        ),
-        tabPanel(
-          "Student Information",
-          fluidRow(
-            column(12, h3("Total number of students")),
-            column(6, p("What is the total number of students across all groups?")),
-            column(6, numericInput("tmpl_total_students", "Total # of students", 12, min = 1))
-          ),
-          fluidRow(
-            column(
-              12,
-              uiOutput("tmpl_student_overflow_warning")
-            )
-          ),
-            fluidRow(
-            column(12, h3("Student Information")),
-            column(12, p("Enter student info below, or click the button to paste from Excel (columns: Last Name, First Name, Group #, Student #).")),
-            column(6, actionButton("tmpl_paste_students", "Paste from Excel")),
-            column(6, actionButton("tmpl_fix_group_student_num_btn", "(Re)calculate group/student numbers")),
-            column(12, 
-              uiOutput("tmpl_student_warning_ui")
-            )
-          ),
-          fluidRow(
-            column(
-              12,
-              helpText("Double-click on a cell in the table below to edit it.")
-            ),
-            column(
-              12,
-              DT::DTOutput("tmpl_student_table"),
-            )
-          ),
-        ),
-        tabPanel(
-          "Station Information",
-          fluidRow(
-            column(12, h3("Station information")),
-            column(6, p("How many stations are there in the schedule?")),
-            column(6, numericInput("tmpl_num_stations", "# of stations", 6, min = 1))
-          ),
-          fluidRow(
-            column(
-              12,
-              class = "col-md-8",
+            tabPanel(
+              "Student Information",
+              fluidRow(
+                column(12, h3("Total number of students")),
+                column(6, p("What is the total number of students across all groups?")),
+                column(6, numericInput("tmpl_total_students", "Total # of students", 12, min = 1))
+              ),
               fluidRow(
                 column(
                   12,
-                  h3("Assign students to stations"),
-                  p("For stations that are longer than one time block, assign the same student number back-to-back."),
-                  actionButton("tmpl_clear_assignments", "Clear All Assignments", icon = icon("eraser"), class = "btn-warning"),
-                  uiOutput("tmpl_schedule_warning_ui"),
-                  uiOutput("tmpl_schedule_ui")
+                  uiOutput("tmpl_student_overflow_warning")
+                )
+              ),
+              fluidRow(
+                column(12, h3("Student Information")),
+                column(12, p("Enter student info below, or click the button to paste from Excel (columns: Last Name, First Name, Group #, Student #).")),
+                column(6, actionButton("tmpl_paste_students", "Paste from Excel")),
+                column(6, actionButton("tmpl_fix_group_student_num_btn", "(Re)calculate group/student numbers")),
+                column(12, 
+                  uiOutput("tmpl_student_warning_ui")
+                )
+              ),
+              fluidRow(
+                column(
+                  12,
+                  helpText("Double-click on a cell in the table below to edit it.")
+                ),
+                column(
+                  12,
+                  DT::DTOutput("tmpl_student_table")
                 )
               )
             ),
-            column(
-              12,
-              class = "col-md-4",
+            tabPanel(
+              "Station Information",
               fluidRow(
-                column(12,
-                  uiOutput("tmpl_station_info_ui")
+                column(12, h3("Station information")),
+                column(6, p("How many stations are there in the schedule?")),
+                column(6, numericInput("tmpl_num_stations", "# of stations", 6, min = 1))
+              ),
+              tabsetPanel(
+                tabPanel(
+                  "Station Names",
+                  fluidRow(
+                    column(12,
+                      p("Note that 'short key' is used to match stations within the code. These must all be unique. You likely don't need to change these"),
+                      uiOutput("tmpl_station_info_ui")
+                    )
+                  )
+                ),
+                tabPanel(
+                  "Station Assignments",
+                  fluidRow(
+                    column(
+                      12,
+                      h3("Assign students to stations"),
+                      p("For stations that are longer than one time block, assign the same student number back-to-back."),
+                      p("Leave a station blank if there's a break"),
+                      actionButton("tmpl_clear_assignments", "Clear All Assignments", icon = icon("eraser"), class = "btn-warning"),
+                      uiOutput("tmpl_schedule_warning_ui"),
+                      uiOutput("tmpl_schedule_ui")
+                    )
+                  )
                 )
               )
             )
           )
         ),
-      ),
-    )
-  ),
-  tabPanel(
-    "Build Schedules",
-    fluidPage(
-      titlePanel("Schedule Generator"),
-      sidebarLayout(
-        sidebarPanel(
-          fileInput("file", "Upload Excel File", accept = ".xlsx"),
-          downloadButton("download", "Download Schedules"),
-          downloadButton("download_students", "Download Student Schedules")
+        tabPanel(
+          "Generated Schedules",
+          uiOutput("scheduleTabs")
         ),
-        mainPanel(
-          tabsetPanel(
-            tabPanel("Generated Schedules", uiOutput("scheduleTabs")),
-            tabPanel(
-              "Student Schedule",
-              selectInput("student_select", "Select Student", choices = NULL),
-              uiOutput("student_schedule_table")
-            ),
-            tabPanel("Student Info", tableOutput("studentInfo")),
-            tabPanel("Group Info", tableOutput("groupInfo")),
-            tabPanel("Time Blocks", tableOutput("timeBlockInfo")),
-            tabPanel("Schedule Template", uiOutput("schedule")),
-            tabPanel("Raw Schedule Table", tableOutput("raw_schedule_table"))
-          )
-        )
+        tabPanel(
+          "Student Schedule",
+          selectInput("student_select", "Select Student", choices = NULL),
+          uiOutput("student_schedule_table")
+        ),
+        tabPanel("Student Info", tableOutput("studentInfo")),
+        tabPanel("Group Info", tableOutput("groupInfo")),
+        tabPanel("Time Blocks", tableOutput("timeBlockInfo")),
+        tabPanel("Schedule Template", uiOutput("schedule")),
+        tabPanel("Raw Schedule Table", tableOutput("raw_schedule_table"))
       )
     )
   )
@@ -833,38 +826,43 @@ server <- function(input, output, session) {
     req(input$tmpl_num_stations)
     n <- input$tmpl_num_stations
     tagList(
-      lapply(seq_len(n), function(i) {
-        prefix <- paste0("tmpl_station_", i, "_")
-        # --- FIX: Ensure station exists ---
-        if (length(tmpl_station_info$stations) < i || is.null(tmpl_station_info$stations[[i]])) {
-          tmpl_station_info$stations[[i]] <<- list()
-        }
-        station <- tmpl_station_info$stations[[i]]
-        short_key_val <- if (!is.null(station$shortKey)) station$shortKey else paste0("S", i)
-        nice_name_val <- if (!is.null(station$niceName)) station$niceName else paste0("Station ", i)
-        time_in_min_val <- if (!is.null(station$timeInMin)) station$timeInMin else ""
-        room1_val <- if (!is.null(station$room1)) station$room1 else ""
-        room2_val <- if (!is.null(station$room2)) station$room2 else ""
-        notes_val <- if (!is.null(station$notes)) station$notes else ""
-        station_color_val <- if (!is.null(station$stationColor)) station$stationColor else "#FFFFFF"
-        tagList(
-          fluidRow(
-            column(12, h4(paste0("Station ", i)))
-          ),
-          fluidRow(
-            column(3, class = "col-md-6", textInput(paste0(prefix, "shortKey"), "Short Key", value = short_key_val)),
-            column(6, class = "col-md-6", textInput(paste0(prefix, "niceName"), "Station Name", value = nice_name_val)),
-            column(3, class = "col-md-6", numericInput(paste0(prefix, "timeInMin"), "Duration (min)", value = time_in_min_val, min = 0)),
-            column(4, class = "col-md-6", colourpicker::colourInput(paste0(prefix, "stationColor"), "Color", value = station_color_val, showColour = "both")),
-            column(4, class = "col-md-6", textInput(paste0(prefix, "room1"), "Main Room", value = room1_val)),
-            column(4, class = "col-md-6", textInput(paste0(prefix, "room2"), "Additional Room", value = room2_val))
-          ),
-          fluidRow(
-            column(12, textInput(paste0(prefix, "notes"), "Notes", value = notes_val))
-          ),
-          tags$hr()
-        )
-      })
+      fluidRow(
+        lapply(seq_len(n), function(i) {
+          prefix <- paste0("tmpl_station_", i, "_")
+          # --- FIX: Ensure station exists ---
+          if (length(tmpl_station_info$stations) < i || is.null(tmpl_station_info$stations[[i]])) {
+            tmpl_station_info$stations[[i]] <<- list()
+          }
+          station <- tmpl_station_info$stations[[i]]
+          short_key_val <- if (!is.null(station$shortKey)) station$shortKey else paste0("S", i)
+          nice_name_val <- if (!is.null(station$niceName)) station$niceName else paste0("Station ", i)
+          time_in_min_val <- if (!is.null(station$timeInMin)) station$timeInMin else ""
+          room1_val <- if (!is.null(station$room1)) station$room1 else ""
+          room2_val <- if (!is.null(station$room2)) station$room2 else ""
+          notes_val <- if (!is.null(station$notes)) station$notes else ""
+          station_color_val <- if (!is.null(station$stationColor)) station$stationColor else "#FFFFFF"
+          column(
+            width = 12, class = "col-md-6",
+            tagList(
+              fluidRow(
+                column(12, h4(paste0("Station ", i)))
+              ),
+              fluidRow(
+                column(3, class = "col-md-6", textInput(paste0(prefix, "shortKey"), "Short Key", value = short_key_val)),
+                column(6, class = "col-md-6", textInput(paste0(prefix, "niceName"), "Station Name", value = nice_name_val)),
+                column(3, class = "col-md-6", numericInput(paste0(prefix, "timeInMin"), "Duration (min)", value = time_in_min_val, min = 0)),
+                column(4, class = "col-md-6", colourpicker::colourInput(paste0(prefix, "stationColor"), "Color", value = station_color_val, showColour = "both")),
+                column(4, class = "col-md-6", textInput(paste0(prefix, "room1"), "Main Room", value = room1_val)),
+                column(4, class = "col-md-6", textInput(paste0(prefix, "room2"), "Additional Room", value = room2_val))
+              ),
+              fluidRow(
+                column(12, textInput(paste0(prefix, "notes"), "Notes", value = notes_val))
+              ),
+              tags$hr()
+            )
+          )
+        })
+      )
     )
   })
 
@@ -1206,7 +1204,9 @@ server <- function(input, output, session) {
   output$scheduleTabs <- renderUI({
     req(data$schedules)
     tabs <- lapply(names(data$schedules), function(name) {
-      tabPanel(name, uiOutput(paste0("sched_", name)))
+      # Remove "Group_" prefix and underscore for display
+      display_name <- sub("^Group_+", "Group ", name)
+      tabPanel(display_name, uiOutput(paste0("sched_", name)))
     })
     do.call(tabsetPanel, tabs)
   })
