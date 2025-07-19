@@ -631,14 +631,14 @@ server <- function(input, output, session) {
   output$tmpl_starttime_names_ui <- renderUI({
     req(input$tmpl_num_starttimes)
     n <- input$tmpl_num_starttimes
-    # Use uploading values when uploading
-    use_upload <- updatingUIfromUploadedData() && !is.null(tmpl_inputs_upload$starttime_names) && length(tmpl_inputs_upload$starttime_names) > 0
-    
-    starttime_names <- if (use_upload) tmpl_inputs_upload$starttime_names else tmpl_inputs$starttime_names
-    arrival_times <- if (use_upload) tmpl_inputs_upload$arrival_times else tmpl_inputs$arrival_times
-    end_times <- if (use_upload) tmpl_inputs_upload$end_times else tmpl_inputs$end_times
   
     isolate({
+      # Use uploading values when uploading
+      use_upload <- updatingUIfromUploadedData() && !is.null(tmpl_inputs_upload$starttime_names) && length(tmpl_inputs_upload$starttime_names) > 0
+      
+      starttime_names <- if (use_upload) tmpl_inputs_upload$starttime_names else tmpl_inputs$starttime_names
+      arrival_times <- if (use_upload) tmpl_inputs_upload$arrival_times else tmpl_inputs$arrival_times
+      end_times <- if (use_upload) tmpl_inputs_upload$end_times else tmpl_inputs$end_times
       print(paste("tmpl_starttime_names_ui rendered at", Sys.time()))
       print(str(starttime_names))
       fluidRow(
