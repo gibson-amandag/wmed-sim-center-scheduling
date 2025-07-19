@@ -174,6 +174,7 @@ generate_group_schedules <- function(data) {
 }
 
 get_start_time_label <- function(index, start_time_names) {
+  if (is.null(index) || is.na(index) || index == "") return(NA)
   idx <- suppressWarnings(as.integer(index))
   if (!is.na(idx) && idx >= 1 && idx <= length(start_time_names)) {
     return(start_time_names[idx])
@@ -204,41 +205,10 @@ ui <- fluidPage(
         inline = TRUE
       ),
       h3("Option (a)"),
-      actionButton("test_delay", "Test shinyjs::delay", class = "btn-warning"),
       p("Enter the schedule information within the 'Enter Info' and 'Station Assignments' tabs"),
       h3("Option (b)"),
       p("Upload an existing Excel template and then edit within the Enter Info and Station Assignments tab as desired"),
       fileInput("file", "Upload Template", accept = ".xlsx", width = "100%"),
-      # Hide this button from user display, but keep it present for programmatic use
-      actionButton(
-          "update_station_info_btn",
-          "4. Update Station Info",
-          width = "100%"
-        ),
-      tags$div(
-        style = "display:none;",
-        p(
-          "Note: In order to add the uploaded information to the \"Enter Info\" tab, you must click this sequence of buttons",
-          style = "color: red;"
-        ),
-        actionButton(
-          "update_start_times_btn",
-          "1. Update Start Times",
-          width = "100%"
-        ),
-        actionButton(
-          "update_group_info_btn",
-          "2. Update Group Info",
-          width = "100%"
-        ),
-        actionButton(
-          "update_student_info_btn",
-          "3. Update Student Info",
-          width = "100%"
-        ),
-        
-        actionButton("load_uploaded_ui", "Load Uploaded Data Into UI", icon = icon("upload"), class = "btn-info", width = "100%")
-      ),
       h2("Step 2:"),
       p("Click the button below to load the entered information and generate schedules"),
       p(
@@ -1417,11 +1387,6 @@ server <- function(input, output, session) {
 
     updateUInumbersFromUploadedData()
 
-    # delay(
-    #   1000,
-    #   shinyjs::click("load_uploaded_ui")
-    # )
-
     delay(
       1000,
       {
@@ -1439,6 +1404,18 @@ server <- function(input, output, session) {
                   100,
                   {
                     updateStationInfoFromUploadedData(tables$schedule)
+                    delay(
+                      100,
+                      {
+                        updateFacultyInfoFromUploadedData(tables$faculty)
+                        delay(
+                          100, 
+                          {
+                            updateStationAssignmentsFromUploadedData(tables$schedule)
+                          }
+                        )
+                      }
+                    )
                   }
                 )
               }
@@ -1447,49 +1424,6 @@ server <- function(input, output, session) {
         )
       }
     )
-  })
-
-  updateUInumbersFromUploadedData <- function() {
-    req(uploadedTables$tables)
-    tables <- uploadedTables$tables
-
-    # Update numeric inputs based on uploaded data
-    updateNumericInput(session, "tmpl_num_starttimes", value = nrow(tables$timeBlockInfo))
-    updateNumericInput(session, "tmpl_num_timeblocks", value = length(grep("^Block[0-9]+_Start$", names(tables$timeBlockInfo))))
-    updateNumericInput(session, "tmpl_num_groups", value = nrow(tables$groupInfo))
-    updateNumericInput(session, "tmpl_max_students", value = max(as.integer(tables$studentInfo$studentNum), na.rm = TRUE))
-    updateNumericInput(session, "tmpl_total_students", value = nrow(tables$studentInfo))
-    updateNumericInput(session, "tmpl_num_stations", value = nrow(tables$schedule))
-  }
-
-  observeEvent(input$update_numbers_btn, {
-    updateUInumbersFromUploadedData()
-  })
-
-  observeEvent(input$update_start_times_btn, {
-    req(uploadedTables$tables)
-    tables <- uploadedTables$tables
-    updateTimeInfoFromUploadedData(tables$timeBlockInfo)
-  })
-
-  observeEvent(input$update_group_info_btn, {
-    req(uploadedTables$tables)
-    tables <- uploadedTables$tables
-    updateGroupInfoFromUploadedData(tables$groupInfo, tables$timeBlockInfo$startTimeLabel)
-    updateStudentColorsFromUploadedData(tables$fillColor)
-  })
-
-  observeEvent(input$update_student_info_btn, {
-    req(uploadedTables$tables)
-    tables <- uploadedTables$tables
-    updateStudentTableFromUploadedData(tables$studentInfo)
-  })
-
-  observeEvent(input$update_station_info_btn, {
-    req(uploadedTables$tables)
-    tables <- uploadedTables$tables
-
-    updateStationInfoFromUploadedData(tables$schedule)
   })
 
   updateTemplateInfoFromUploadedData <- function (tables){
@@ -1548,6 +1482,29 @@ server <- function(input, output, session) {
     h <- floor(frac * 24)
     m <- round((frac * 24 - h) * 60)
     strptime(sprintf("%02d:%02d", h, m), "%H:%M")
+  }
+
+  updateUInumbersFromUploadedData <- function() {
+    req(uploadedTables$tables)
+    tables <- uploadedTables$tables
+
+    # Update numeric inputs based on uploaded data
+    updateNumericInput(session, "tmpl_num_starttimes", value = nrow(tables$timeBlockInfo))
+    updateNumericInput(session, "tmpl_num_timeblocks", value = length(grep("^Block[0-9]+_Start$", names(tables$timeBlockInfo))))
+    updateNumericInput(session, "tmpl_num_groups", value = nrow(tables$groupInfo))
+    updateNumericInput(session, "tmpl_max_students", value = max(as.integer(tables$studentInfo$studentNum), na.rm = TRUE))
+    updateNumericInput(session, "tmpl_total_students", value = nrow(tables$studentInfo))
+    updateNumericInput(session, "tmpl_num_stations", value = nrow(tables$schedule))
+
+    # Update faculty radio button based on uploaded faculty table columns
+    if (!is.null(tables$faculty)) {
+      faculty_cols <- names(tables$faculty)
+      if (all(c("groupNum", "studentNum", "faculty") %in% faculty_cols)) {
+        updateRadioButtons(session, "faculty_assign_mode", selected = "student")
+      } else if (any(grepl("^group[0-9]+$", faculty_cols))) {
+        updateRadioButtons(session, "faculty_assign_mode", selected = "room")
+      }
+    }
   }
 
    updateStudentTableFromUploadedData <- function(studentInfo) {
@@ -1639,52 +1596,45 @@ server <- function(input, output, session) {
     }
   }
 
-  observeEvent(input$load_uploaded_ui, {
-    tables <- uploadedTables$tables
-    req(tables)
-
-    # shinyjs::click("update_start_times_btn")
-    # delay(
-    #   100,
-    #   {
-    #     shinyjs::click("update_group_info_btn")
-    #     delay(
-    #       100,
-    #       {
-    #         shinyjs::click("update_student_info_btn")
-    #         delay(
-    #           100,
-    #           {
-    #             shinyjs::click("update_station_info_btn")
-    #           }
-    #         )
-    #       }
-    #     )
-    #   }
-    # )
-
-    updateTimeInfoFromUploadedData(tables$timeBlockInfo)
-    delay(
-      100,
-      {
-        updateGroupInfoFromUploadedData(tables$groupInfo, tables$timeBlockInfo$startTimeLabel)
-        updateStudentColorsFromUploadedData(tables$fillColor)
-        delay(
-          100,
-          {
-            updateStudentTableFromUploadedData(tables$studentInfo)
-            delay(
-              100,
-              {
-                updateStationInfoFromUploadedData(tables$schedule)
-              }
-            )
-          }
-        )
+  updateStationAssignmentsFromUploadedData <- function(schedule) {
+    req(schedule)
+    # Identify time block columns
+    timeblock_cols <- grep("^TimeBlock", names(schedule), value = TRUE)
+    n_stations <- nrow(schedule)
+    n_blocks <- length(timeblock_cols)
+    for (i in seq_len(n_stations)) {
+      for (j in seq_len(n_blocks)) {
+        inputId <- paste0("sched_", i, "_", j)
+        val <- schedule[[timeblock_cols[j]]][i]
+        updateSelectInput(session, inputId, selected = if (!is.null(val)) as.character(val) else "")
       }
-    )
-  })
+    }
+  }
 
+  updateFacultyInfoFromUploadedData <- function(facultyInfo) {
+    req(facultyInfo)
+    # By student: columns groupNum, studentNum, faculty
+    if (all(c("groupNum", "studentNum", "faculty") %in% names(facultyInfo))) {
+      for (i in seq_len(nrow(facultyInfo))) {
+        g <- as.character(facultyInfo$groupNum[i])
+        s <- as.integer(facultyInfo$studentNum[i])
+        val <- facultyInfo$faculty[i]
+        inputId <- paste0("faculty_student_", g, "_", s)
+        updateTextInput(session, inputId, value = val)
+      }
+    # By room: columns shortKey, group1, group2, ...
+    } else if ("shortKey" %in% names(facultyInfo) && any(grepl("^group[0-9]+$", names(facultyInfo)))) {
+      group_cols <- grep("^group[0-9]+$", names(facultyInfo), value = TRUE)
+      for (row in seq_len(nrow(facultyInfo))) {
+        for (group_col in group_cols) {
+          g <- sub("^group", "", group_col)
+          val <- facultyInfo[[group_col]][row]
+          inputId <- paste0("faculty_room_", g, "_", row)
+          updateTextInput(session, inputId, value = val)
+        }
+      }
+    }
+  }
 
   ########################
   ## Render tables and UI elements
