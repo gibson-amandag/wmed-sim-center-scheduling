@@ -2288,9 +2288,9 @@ server <- function(input, output, session) {
       # --- Add template sheets first ---
       tmpl <- template_data()
       addWorksheet(wb, "studentInfo")
-      writeData(wb, "studentInfo", tmpl$studentInfo)
+      writeDataTable(wb, "studentInfo", tmpl$studentInfo, tableStyle = "TableStyleLight1")
       addWorksheet(wb, "groupInfo")
-      writeData(wb, "groupInfo", tmpl$groupInfo)
+      writeDataTable(wb, "groupInfo", tmpl$groupInfo, tableStyle = "TableStyleLight1")
       addWorksheet(wb, "fillColor")
       writeData(wb, "fillColor", tmpl$fillColor)
       # Color the fillColor cells
@@ -2308,7 +2308,7 @@ server <- function(input, output, session) {
         }
       }
       addWorksheet(wb, "timeBlockInfo")
-      writeData(wb, "timeBlockInfo", tmpl$timeBlockInfo)
+      writeDataTable(wb, "timeBlockInfo", tmpl$timeBlockInfo, tableStyle = "TableStyleLight1")
       time_style <- createStyle(numFmt = "hh:mm")
       time_cols <- which(grepl("Time$|_Start$|_End$", names(tmpl$timeBlockInfo)))
       addStyle(
@@ -2318,9 +2318,9 @@ server <- function(input, output, session) {
         gridExpand = TRUE, stack = TRUE
       )
       addWorksheet(wb, "schedule")
-      writeData(wb, "schedule", tmpl$schedule)
+      writeDataTable(wb, "schedule", tmpl$schedule, tableStyle = "TableStyleLight1")
       addWorksheet(wb, "faculty")
-      writeData(wb, "faculty", tmpl$faculty)
+      writeDataTable(wb, "faculty", tmpl$faculty, tableStyle = "TableStyleLight1")
 
       for (name in names(data$schedules)) {
         sched <- data$schedules[[name]]
