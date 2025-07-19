@@ -136,16 +136,30 @@ generate_group_schedules <- function(data) {
       # Get time block times for this start time
       timeblock_times <- setNames(
         lapply(seq_along(time_blocks), function(i) {
-          colname <- paste0("Block", i, "_Start")
-          val <- tb_info[[colname]][tb_row]
-          if (!is.null(val) && !is.na(val)) {
-            h <- floor(val * 24)
-            m <- round((val * 24 - h) * 60)
-            if (m == 60) {
-              h <- h + 1
-              m <- 0
+          start_col <- paste0("Block", i, "_Start")
+          end_col <- paste0("Block", i, "_End")
+          start_val <- tb_info[[start_col]][tb_row]
+          end_val <- tb_info[[end_col]][tb_row]
+          # Helper to format fraction to time string
+          format_time <- function(val) {
+            if (!is.null(val) && !is.na(val)) {
+              h <- floor(val * 24)
+              m <- round((val * 24 - h) * 60)
+              if (m == 60) {
+                h <- h + 1
+                m <- 0
+              }
+              sprintf("%02d:%02d", h, m)
+            } else {
+              ""
             }
-            sprintf("%02d:%02d", h, m)
+          }
+          start_str <- format_time(start_val)
+          end_str <- format_time(end_val)
+          if (start_str != "" && end_str != "") {
+            paste0(start_str, " - ", end_str)
+          } else if (start_str != "") {
+            start_str
           } else {
             NA
           }
