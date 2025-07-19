@@ -235,6 +235,9 @@ ui <- fluidPage(
       width = 12,
       class = "col-md-4 col-lg-3",
       style = "background-color: #f5f5f5; padding: 10px; border-right: 1px solid #ddd;",
+      h4("Event Information"),
+      textInput("event_nice_name", "Event Name (for display)", value = "", width = "100%"),
+      textInput("event_file_name", "Event File Name (for downloads)", value = "", width = "100%"),
       h2("Step 1:"),
       h3("Option (a)"),
       p("Enter the schedule information within the 'Enter Info' and 'Station Assignments' tabs"),
@@ -1407,6 +1410,14 @@ server <- function(input, output, session) {
   observeEvent(input$file, {
     req(input$file)
     tables <- load_data(input$file$datapath)
+
+    # Infer nice name from file name (remove extension, replace underscores with spaces)
+    fname <- input$file$name
+    base <- tools::file_path_sans_ext(basename(fname))
+    nice <- gsub("_", " ", base)
+    updateTextInput(session, "event_nice_name", value = nice)
+    updateTextInput(session, "event_file_name", value = base)
+
     data$studentInfo <- tables$studentInfo
     data$groupInfo <- tables$groupInfo
     data$fillColor <- tables$fillColor
@@ -2267,7 +2278,9 @@ server <- function(input, output, session) {
 
   output$download <- downloadHandler(
     filename = function() {
-      "Generated_Schedules.xlsx"
+      fname <- input$event_file_name
+      if (is.null(fname) || fname == "") fname <- "Generated_Schedules"
+      paste0(fname, ".xlsx")
     },
     content = function(file) {
       wb <- createWorkbook()
@@ -2426,9 +2439,21 @@ server <- function(input, output, session) {
   # ---- Student Schedules Download Handler ----
   output$download_students <- downloadHandler(
     filename = function() {
-      "Student_Schedules.zip"
+      fname <- input$event_file_name
+      if (is.null(fname) || fname == ""){
+        fname <- "Student_Schedules"
+      } else {
+        fname <- paste0(fname, "_Student_Schedules")
+      }
+      paste0(fname, ".zip")
     },
     content = function(file) {
+      fname <- input$event_file_name
+      if (is.null(fname) || fname == ""){
+        fname <- "Student_Schedules"
+      } else {
+        fname <- paste0(fname, "_Student_Schedules")
+      }
       tmpdir <- tempdir()
       group_files <- c()
       for (group_name in names(data$schedules)) {
@@ -2514,7 +2539,8 @@ server <- function(input, output, session) {
             }
           }
         }
-        group_file <- file.path(tmpdir, paste0("Group_", groupNum, "_Student_Schedules.xlsx"))
+        group_file <- file.path(tmpdir, paste0(fname, "_Group_", groupNum, ".xlsx"))
+
         saveWorkbook(wb, group_file, overwrite = TRUE)
         group_files <- c(group_files, group_file)
       }
@@ -2526,9 +2552,21 @@ server <- function(input, output, session) {
   # Download station schedules -----------------
     output$download_station_schedules <- downloadHandler(
     filename = function() {
-      "Station_Schedules.zip"
+      fname <- input$event_file_name
+      if (is.null(fname) || fname == ""){
+        fname <- "Station_Schedules"
+      } else {
+        fname <- paste0(fname, "_Station_Schedules")
+      }
+      paste0(fname, ".zip")
     },
     content = function(file) {
+      fname <- input$event_file_name
+      if (is.null(fname) || fname == ""){
+        fname <- "Station_Schedules"
+      } else {
+        fname <- paste0(fname, "_Station_Schedules")
+      }
       tmpdir <- tempdir()
       group_files <- c()
       for (group_name in names(data$schedules)) {
@@ -2638,7 +2676,7 @@ server <- function(input, output, session) {
             }
           }
         }
-        group_file <- file.path(tmpdir, paste0("Group_", groupNum, "_Station_Schedules.xlsx"))
+        group_file <- file.path(tmpdir, paste0(fname, "_Group_", groupNum, ".xlsx"))
         saveWorkbook(wb, group_file, overwrite = TRUE)
         group_files <- c(group_files, group_file)
       }
