@@ -8,6 +8,7 @@ library(colourpicker)
 library(shinyTime)
 library(shinyjs)
 library(lubridate)
+library(hms)
 
 fraction_to_posix <- function(frac) {
   if (is.na(frac) || frac == "") return(NULL)
