@@ -746,11 +746,9 @@ server <- function(input, output, session) {
   }
 
   # --- UI for group info entry ---
-  output$tmpl_group_info_ui <- renderUI({
+    output$tmpl_group_info_ui <- renderUI({
     req(input$tmpl_num_groups, input$tmpl_num_starttimes)
     n <- input$tmpl_num_groups
-
-    # Get names from tmpl_inputs
     start_time_names <- sapply(seq_len(input$tmpl_num_starttimes), function(i) {
       key <- paste0("tmpl_starttime_name_", i)
       nm <- tmpl_inputs$starttime_names[[key]]
@@ -758,27 +756,33 @@ server <- function(input, output, session) {
     })
     # Create named vector: values = index, names = label
     time_of_day_choices <- setNames(as.character(seq_along(start_time_names)), start_time_names)
-    tagList(
-      lapply(seq_len(n), function(i) {
-        prefix <- paste0("tmpl_group_", i, "_")
-        group <- tmpl_group_info$groups[[i]]
-        groupNum_val <- if (!is.null(group) && !is.null(group$groupNum)) group$groupNum else paste0("Group ", i)
-        date_val <- if (!is.null(group) && !is.null(group$date)) group$date else NULL
-        startTime_val <- if (!is.null(group) && !is.null(group$startTime)) group$startTime else ""
-        endTime_val <- if (!is.null(group) && !is.null(group$endTime)) group$endTime else ""
-        # Default to index as value
-        timeOfDay_val <- if (!is.null(group) && !is.null(group$timeOfDay) && group$timeOfDay %in% as.character(seq_along(start_time_names))) {
-          group$timeOfDay
-        } else {
-          as.character(i)
-        }
-        fluidRow(
-          column(4, textInput(paste0(prefix, "groupNum"), paste0("Group ", i, " Name"), value = groupNum_val)),
-          column(4, dateInput(paste0(prefix, "date"), "Date", value = if (!is.null(date_val)) date_val else NULL)),
-          column(4, selectInput(paste0(prefix, "timeOfDay"), "Time of Day", choices = time_of_day_choices, selected = timeOfDay_val))
-        )
-      })
-    )
+    isolate({
+      tagList(
+        lapply(seq_len(n), function(i) {
+          prefix <- paste0("tmpl_group_", i, "_")
+          group <- tmpl_group_info$groups[[i]]
+          groupNum_val <- if (!is.null(group) && !is.null(group$groupNum)) group$groupNum else paste0("Group ", i)
+          date_val <- if (!is.null(group) && !is.null(group$date)) group$date else NULL
+          startTime_val <- if (!is.null(group) && !is.null(group$startTime)) group$startTime else ""
+          endTime_val <- if (!is.null(group) && !is.null(group$endTime)) group$endTime else ""
+          # Default to index as value
+          timeOfDay_val <- if (!is.null(group) && !is.null(group$timeOfDay) && group$timeOfDay %in% as.character(seq_along(start_time_names))) {
+            group$timeOfDay
+          } else {
+            as.character(i)
+          }
+          # print(
+          #   str(timeOfDay_val),
+          #   str(get_start_time_label(timeOfDay_val, start_time_names))
+          # )
+          fluidRow(
+            column(4, textInput(paste0(prefix, "groupNum"), paste0("Group ", i, " Name"), value = groupNum_val)),
+            column(4, dateInput(paste0(prefix, "date"), "Date", value = if (!is.null(date_val)) date_val else NULL)),
+            column(4, selectInput(paste0(prefix, "timeOfDay"), "Time of Day", choices = time_of_day_choices, selected = timeOfDay_val))
+          )
+        })
+      )
+    })
   })
 
   # --- UI for student color pickers ---
