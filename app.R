@@ -1502,8 +1502,21 @@ server <- function(input, output, session) {
 
   updateTimeInfoFromUploadedData <- function(timeBlockInfo) {
     req(timeBlockInfo)
+    # Check structure: must have startTimeLabel, arrivalTime, leaveTime, and at least one BlockX_Start/BlockX_End
+    required_cols <- c("startTimeLabel", "arrivalTime", "leaveTime")
+    block_start_cols <- grep("^Block[0-9]+_Start$", names(timeBlockInfo), value = TRUE)
+    block_end_cols <- grep("^Block[0-9]+_End$", names(timeBlockInfo), value = TRUE)
+    if (!all(required_cols %in% names(timeBlockInfo)) || length(block_start_cols) == 0 || length(block_end_cols) == 0) {
+      showNotification(
+        "Uploaded timeBlockInfo sheet does not have the required columns (startTimeLabel, arrivalTime, leaveTime, BlockX_Start, BlockX_End). Skipping update.",
+        type = "error",
+        duration = 10
+      )
+      return(invisible(NULL))
+    }
+
     num_starttimes <- nrow(timeBlockInfo)
-    num_timeblocks <- length(grep("^Block[0-9]+_Start$", names(timeBlockInfo)))
+    num_timeblocks <- length(block_start_cols)
     # Update number of start times and time blocks
     updateNumericInput(session, "tmpl_num_starttimes", value = num_starttimes)
     updateNumericInput(session, "tmpl_num_timeblocks", value = num_timeblocks)
