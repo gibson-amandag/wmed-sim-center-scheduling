@@ -1292,7 +1292,15 @@ server <- function(input, output, session) {
 
     update_tmpl_group_info()
     group_panels <- lapply(seq_len(num_groups), function(g) {
-      group_label <- paste("Group", g)
+      # Use group name from group info if available
+      group_label <- {
+        group <- tmpl_group_info$groups[[g]]
+        if (!is.null(group) && !is.null(group$groupNum) && group$groupNum != "") {
+          paste("Group", group$groupNum)
+        } else {
+          paste("Group", g)
+        }
+      }
       group_date <- input[[paste0("tmpl_group_", g, "_date")]]
       group_timeOfDay <- input[[paste0("tmpl_group_", g, "_timeOfDay")]]
       time_label <- get_start_time_label(group_timeOfDay, start_time_names)
@@ -1599,14 +1607,15 @@ server <- function(input, output, session) {
         updateTextInput(session, inputId, value = val)
       }
     # By room: columns shortKey, group1, group2, ...
-    } else if ("shortKey" %in% names(facultyInfo) && any(grepl("^group[0-9]+$", names(facultyInfo)))) {
-      group_cols <- grep("^group[0-9]+$", names(facultyInfo), value = TRUE)
-      for (row in seq_len(nrow(facultyInfo))) {
+    } else if ("shortKey" %in% names(facultyInfo) && any(grepl("^group", names(facultyInfo)))) {
+      group_cols <- grep("^group", names(facultyInfo), value = TRUE)
+      for (row_idx in seq_len(nrow(facultyInfo))) {
         for (group_col in group_cols) {
-          g <- sub("^group", "", group_col)
-          val <- facultyInfo[[group_col]][row]
-          inputId <- paste0("faculty_room_", g, "_", row)
-          updateTextInput(session, inputId, value = val)
+            # Find the group index for this group_col (e.g., group1 -> 1, group2 -> 2, etc.)
+            group_index <- which(group_cols == group_col)
+            val <- facultyInfo[[group_col]][row_idx]
+            input_id <- paste0("faculty_room_", group_index, "_", row_idx)
+            updateTextInput(session, input_id, value = val)
         }
       }
     }
