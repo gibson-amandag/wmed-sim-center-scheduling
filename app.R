@@ -194,21 +194,15 @@ ui <- fluidPage(
       class = "col-md-4 col-lg-3",
       style = "background-color: #f5f5f5; padding: 10px; border-right: 1px solid #ddd;",
       h2("Step 1:"),
-      radioButtons(
-        "use_uploaded_values",
-        "Use uploaded template values or edit? After you upload, switch this back to edit",
-        choices = c(
-          "Edit within app" = "edit",
-          "Use uploaded values" = "upload"
-        ),
-        selected = "edit",
-        inline = TRUE
-      ),
       h3("Option (a)"),
       p("Enter the schedule information within the 'Enter Info' and 'Station Assignments' tabs"),
       h3("Option (b)"),
       p("Upload an existing Excel template and then edit within the Enter Info and Station Assignments tab as desired"),
       fileInput("file", "Upload Template", accept = ".xlsx", width = "100%"),
+      p(
+        "Be sure to check the uploaded information for any errors, such as incorrect group names, or double assignments",
+        style = "color: red;"
+      ),
       h2("Step 2:"),
       p("Click the button below to load the entered information and generate schedules"),
       p(
@@ -424,36 +418,7 @@ server <- function(input, output, session) {
     by_student = list() # by_student[[group]][[studentNum]] = faculty name
   )
 
-  # Uploading values ---------
   uploadedTables <- reactiveValues()
-
-  updatingUIfromUploadedData <- reactiveVal(FALSE)
-
-  # --- Start times ---
-  tmpl_inputs_upload <- reactiveValues(
-    starttime_names = list(),
-    timeblock_times = list(),
-    arrival_times = list(),
-    end_times = list()
-  )
-
-  # --- Group Info ---
-  tmpl_group_info_upload <- reactiveValues(groups = list())
-
-  # --- Fill Color ---
-  tmpl_fillColor_upload <- reactiveValues(colors = list())
-
-  # ---  Student info ---------
-  tmpl_students_upload <- reactiveVal(NULL)
-
-  # --- Station Info ---
-  tmpl_station_info_upload <- reactiveValues(stations = list())
-
-  # --- Faculty Assignments ---
-  faculty_assignments_upload <- reactiveValues(
-    by_room = list(),   # by_room[[group]][[station]] = faculty name
-    by_student = list() # by_student[[group]][[studentNum]] = faculty name
-  )
 
   ##############################
   ## Observers for template inputs
@@ -650,14 +615,12 @@ server <- function(input, output, session) {
   output$tmpl_starttime_names_ui <- renderUI({
     req(input$tmpl_num_starttimes)
     n <- input$tmpl_num_starttimes
-  
+
     isolate({
-      # Use uploading values when uploading
-      use_upload <- updatingUIfromUploadedData() && !is.null(tmpl_inputs_upload$starttime_names) && length(tmpl_inputs_upload$starttime_names) > 0
-      
-      starttime_names <- if (use_upload) tmpl_inputs_upload$starttime_names else tmpl_inputs$starttime_names
-      arrival_times <- if (use_upload) tmpl_inputs_upload$arrival_times else tmpl_inputs$arrival_times
-      end_times <- if (use_upload) tmpl_inputs_upload$end_times else tmpl_inputs$end_times
+      # Always use tmpl_inputs, not upload
+      starttime_names <- tmpl_inputs$starttime_names
+      arrival_times <- tmpl_inputs$arrival_times
+      end_times <- tmpl_inputs$end_times
       fluidRow(
         column(12, helpText("Enter times as hh:mm (24-hour format, e.g. 07:30 and 17:15)")),
         lapply(seq_len(n), function(i) {
@@ -697,21 +660,12 @@ server <- function(input, output, session) {
   })
 
   buildTimeblockUI <- function(num_starttimes, num_timeblocks){
-    # Use uploaded values if updatingUIfromUploadedData() is TRUE and upload values exist
-    use_upload <- updatingUIfromUploadedData() && !is.null(tmpl_inputs_upload$starttime_names) && length(tmpl_inputs_upload$starttime_names) > 0
-    # use_upload <- FALSE
-
     update_tmpl_timeblock_times()
 
     start_names <- sapply(seq_len(num_starttimes), function(i) {
       key <- paste0("tmpl_starttime_name_", i)
-      if (use_upload) {
-        if (!is.null(tmpl_inputs_upload$starttime_names[[key]])) tmpl_inputs_upload$starttime_names[[key]]
-        else if (i == 1) "AM" else if (i == 2) "PM" else paste0("Start", i)
-      } else {
-        if (!is.null(tmpl_inputs$starttime_names[[key]])) tmpl_inputs$starttime_names[[key]]
-        else if (i == 1) "AM" else if (i == 2) "PM" else paste0("Start", i)
-      }
+      if (!is.null(tmpl_inputs$starttime_names[[key]])) tmpl_inputs$starttime_names[[key]]
+      else if (i == 1) "AM" else if (i == 2) "PM" else paste0("Start", i)
     })
     fluidRow(
       lapply(seq_len(num_starttimes), function(st_idx) {
@@ -737,14 +691,8 @@ server <- function(input, output, session) {
             start_key <- paste0("tmpl_timeblock_", st_idx, "_", tb_idx, "_start")
             end_key <- paste0("tmpl_timeblock_", st_idx, "_", tb_idx, "_end")
             label <- start_names[st_idx]
-            # Use uploaded or current values for stored times
-            if (use_upload) {
-              stored_start <- tmpl_inputs_upload$timeblock_times[[start_key]]
-              stored_end <- tmpl_inputs_upload$timeblock_times[[end_key]]
-            } else {
-              stored_start <- tmpl_inputs$timeblock_times[[start_key]]
-              stored_end <- tmpl_inputs$timeblock_times[[end_key]]
-            }
+            stored_start <- tmpl_inputs$timeblock_times[[start_key]]
+            stored_end <- tmpl_inputs$timeblock_times[[end_key]]
             if (tolower(label) == "am") {
               start_minutes <- 8 * 60 + (tb_idx - 1) * 30
               end_minutes <- start_minutes + 30
@@ -780,92 +728,74 @@ server <- function(input, output, session) {
     req(input$tmpl_num_groups, input$tmpl_num_starttimes)
     n <- input$tmpl_num_groups
 
-    # Use uploaded values if updatingUIfromUploadedData() is TRUE and upload values exist
-    use_upload <- updatingUIfromUploadedData() && !is.null(tmpl_group_info_upload$groups) && length(tmpl_group_info_upload$groups) > 0
-
-    # Use uploaded or current start time names
+    # Get names from tmpl_inputs
     start_time_names <- sapply(seq_len(input$tmpl_num_starttimes), function(i) {
       key <- paste0("tmpl_starttime_name_", i)
-      if (use_upload) {
-        nm <- tmpl_inputs_upload$starttime_names[[key]]
-      } else {
-        nm <- tmpl_inputs$starttime_names[[key]]
-      }
+      nm <- tmpl_inputs$starttime_names[[key]]
       if (is.null(nm) || nm == "") paste0("Start", i) else nm
     })
     # Create named vector: values = index, names = label
     time_of_day_choices <- setNames(as.character(seq_along(start_time_names)), start_time_names)
-    isolate({
-      tagList(
-        lapply(seq_len(n), function(i) {
-          prefix <- paste0("tmpl_group_", i, "_")
-          if (use_upload) {
-            group <- tmpl_group_info_upload$groups[[i]]
-          } else {
-            group <- tmpl_group_info$groups[[i]]
-          }
-          groupNum_val <- if (!is.null(group) && !is.null(group$groupNum)) group$groupNum else paste0("Group ", i)
-          date_val <- if (!is.null(group) && !is.null(group$date)) group$date else NULL
-          startTime_val <- if (!is.null(group) && !is.null(group$startTime)) group$startTime else ""
-          endTime_val <- if (!is.null(group) && !is.null(group$endTime)) group$endTime else ""
-          # Default to index as value
-          timeOfDay_val <- if (!is.null(group) && !is.null(group$timeOfDay) && group$timeOfDay %in% as.character(seq_along(start_time_names))) {
-            group$timeOfDay
-          } else {
-            as.character(i)
-          }
-          fluidRow(
-            column(4, textInput(paste0(prefix, "groupNum"), paste0("Group ", i, " Name"), value = groupNum_val)),
-            column(4, dateInput(paste0(prefix, "date"), "Date", value = if (!is.null(date_val)) date_val else NULL)),
-            column(4, selectInput(paste0(prefix, "timeOfDay"), "Time of Day", choices = time_of_day_choices, selected = timeOfDay_val))
-          )
-        })
-      )
-    })
+    tagList(
+      lapply(seq_len(n), function(i) {
+        prefix <- paste0("tmpl_group_", i, "_")
+        group <- tmpl_group_info$groups[[i]]
+        groupNum_val <- if (!is.null(group) && !is.null(group$groupNum)) group$groupNum else paste0("Group ", i)
+        date_val <- if (!is.null(group) && !is.null(group$date)) group$date else NULL
+        startTime_val <- if (!is.null(group) && !is.null(group$startTime)) group$startTime else ""
+        endTime_val <- if (!is.null(group) && !is.null(group$endTime)) group$endTime else ""
+        # Default to index as value
+        timeOfDay_val <- if (!is.null(group) && !is.null(group$timeOfDay) && group$timeOfDay %in% as.character(seq_along(start_time_names))) {
+          group$timeOfDay
+        } else {
+          as.character(i)
+        }
+        fluidRow(
+          column(4, textInput(paste0(prefix, "groupNum"), paste0("Group ", i, " Name"), value = groupNum_val)),
+          column(4, dateInput(paste0(prefix, "date"), "Date", value = if (!is.null(date_val)) date_val else NULL)),
+          column(4, selectInput(paste0(prefix, "timeOfDay"), "Time of Day", choices = time_of_day_choices, selected = timeOfDay_val))
+        )
+      })
+    )
   })
 
   # --- UI for student color pickers ---
   output$tmpl_student_colors_ui <- renderUI({
-    req(input$tmpl_max_students)
-    n <- input$tmpl_max_students
+      req(input$tmpl_max_students)
+      n <- input$tmpl_max_students
   
-    # Use uploaded values if updatingUIfromUploadedData() is TRUE and upload values exist
-    use_upload <- updatingUIfromUploadedData() && !is.null(tmpl_fillColor_upload$colors) && length(tmpl_fillColor_upload$colors) > 0
-  
-    # Default colors (repeat if needed)
-    default_colors <- c(
-      "#FF7C80", "#FFA365", "#FFFF00", "#AEFF5D", "#A6A200", "#97CBFF",
-      "#9797FF", "#FAB3FF", "#CC66FF", "#D4D2D2", "#FFE285", "#B3773B",
-      "#85FFDF", "#25C6FF", "#6B9572", "#FF8FDA", "#93AA00", "#593315",
-      "#F13A13", "#232C16"
-    )
-  
-    tagList(
-      fluidRow(
-        column(12, h4("Student Colors (for fillColor sheet)"))
-      ),
-      fluidRow(
-        lapply(seq_len(n), function(i) {
-          key <- paste0("tmpl_student_color_", i)
-          # Priority: uploaded fillColor > current fillColor > input > default
-          if (use_upload && !is.null(tmpl_fillColor_upload$colors[[key]])) {
-            val <- tmpl_fillColor_upload$colors[[key]]
-          } else if (!use_upload && !is.null(tmpl_fillColor$colors[[key]])) {
-            val <- tmpl_fillColor$colors[[key]]
-          } else {
-            val <- isolate(input[[key]])
-          }
-          default_val <- if (!is.null(val) && val != "") val else default_colors[(i - 1) %% length(default_colors) + 1]
-          column(
-            4,
-            tags$div(
-              paste("Student", i),
-              colourpicker::colourInput(key, NULL, value = default_val, showColour = "both")
-            )
-          )
-        })
+      # Always use tmpl_fillColor, not upload
+      default_colors <- c(
+        "#FF7C80", "#FFA365", "#FFFF00", "#AEFF5D", "#A6A200", "#97CBFF",
+        "#9797FF", "#FAB3FF", "#CC66FF", "#D4D2D2", "#FFE285", "#B3773B",
+        "#85FFDF", "#25C6FF", "#6B9572", "#FF8FDA", "#93AA00", "#593315",
+        "#F13A13", "#232C16"
       )
-    )
+  
+      tagList(
+        fluidRow(
+          column(12, h4("Student Colors (for fillColor sheet)"))
+        ),
+        fluidRow(
+          lapply(seq_len(n), function(i) {
+            key <- paste0("tmpl_student_color_", i)
+            # Priority: tmpl_fillColor > input > default
+            if (!is.null(tmpl_fillColor$colors[[key]])) {
+              val <- tmpl_fillColor$colors[[key]]
+            } else {
+              val <- isolate(input[[key]])
+            }
+            default_val <- if (!is.null(val) && val != "") val else default_colors[(i - 1) %% length(default_colors) + 1]
+            column(
+              4,
+              tags$div(
+                paste("Student", i),
+                colourpicker::colourInput(key, NULL, value = default_val, showColour = "both")
+              )
+            )
+          })
+        )
+      )
   })
 
   output$tmpl_student_overflow_warning <- renderUI({
@@ -1017,6 +947,7 @@ server <- function(input, output, session) {
   
     # Check for groupNum not in groupInfo
     groupInfo_names <- NULL
+    update_tmpl_group_info()
     if (!is.null(tmpl_group_info$groups) && length(tmpl_group_info$groups) > 0) {
       groupInfo_names <- sapply(tmpl_group_info$groups, function(g) {
         if (!is.null(g$groupNum) && g$groupNum != "") as.character(g$groupNum) else NA
@@ -1405,7 +1336,7 @@ server <- function(input, output, session) {
                   {
                     updateStationInfoFromUploadedData(tables$schedule)
                     delay(
-                      100,
+                      300,
                       {
                         updateFacultyInfoFromUploadedData(tables$faculty)
                         delay(
@@ -1425,57 +1356,6 @@ server <- function(input, output, session) {
       }
     )
   })
-
-  updateTemplateInfoFromUploadedData <- function (tables){
-    timeBlockInfo <- tables$timeBlockInfo
-    num_starttimes <- nrow(timeBlockInfo)
-    num_timeblocks <- length(grep("^Block[0-9]+_Start$", names(timeBlockInfo)))
-    
-    for(i in seq_len(num_starttimes)){
-      # Update tmpl_inputs for start time label, arrival, and end times
-      tmpl_inputs_upload$starttime_names[[paste0("tmpl_starttime_name_", i)]] <- timeBlockInfo$startTimeLabel[i]
-      tmpl_inputs_upload$arrival_times[[paste0("tmpl_arrival_", i)]] <- fraction_to_posix(timeBlockInfo$arrivalTime[i])
-      tmpl_inputs_upload$end_times[[paste0("tmpl_end_", i)]] <- fraction_to_posix(timeBlockInfo$leaveTime[i])
-      # Update time block start/end times
-      for (tb in seq_len(num_timeblocks)) {
-      start_col <- paste0("Block", tb, "_Start")
-      end_col <- paste0("Block", tb, "_End")
-      if (start_col %in% names(timeBlockInfo)) {
-        tmpl_inputs_upload$timeblock_times[[paste0("tmpl_timeblock_", i, "_", tb, "_start")]] <- fraction_to_posix(timeBlockInfo[[start_col]][i])
-      }
-      if (end_col %in% names(timeBlockInfo)) {
-        tmpl_inputs_upload$timeblock_times[[paste0("tmpl_timeblock_", i, "_", tb, "_end")]] <- fraction_to_posix(timeBlockInfo[[end_col]][i])
-      }
-      }
-    }
-
-    tmpl_inputs <- tmpl_inputs_upload
-
-    groupInfo <- tables$groupInfo
-    startTimeLabels <- tables$timeBlockInfo$startTimeLabel
-    for (i in seq_len(nrow(groupInfo))) {
-      # Find the index of the matching start time label
-      timeOfDay_idx <- which(startTimeLabels == groupInfo$timeOfDay[i])
-      tmpl_group_info_upload$groups[[i]] <- list(
-        groupNum = groupInfo$groupNum[i],
-        date = as.Date(groupInfo$date[i]),
-        startTime = groupInfo$startTime[i],
-        endTime = groupInfo$endTime[i],
-        timeOfDay = timeOfDay_idx
-      )
-    }
-
-    tmpl_group_info <- tmpl_group_info_upload
-
-  }
-
-  clearTemplateUploadInputs <- function() {
-    tmpl_inputs_upload$starttime_names <- list()
-    tmpl_inputs_upload$arrival_times <- list()
-    tmpl_inputs_upload$end_times <- list()
-    tmpl_inputs_upload$timeblock_times <- list()
-    tmpl_group_info_upload$groups <- list()
-  }
 
   fraction_to_posix <- function(frac) {
     if (is.na(frac) || frac == "") return(NULL)
@@ -2640,7 +2520,7 @@ server <- function(input, output, session) {
   outputOptions(output, "tmpl_student_table", suspendWhenHidden = FALSE)
   outputOptions(output, "tmpl_station_info_ui", suspendWhenHidden = FALSE)
   outputOptions(output, "tmpl_schedule_ui", suspendWhenHidden = FALSE)
-  # outputOptions(output, "faculty_assignment_ui", suspendWhenHidden = FALSE) # gives error when called
+  outputOptions(output, "faculty_assignment_ui", suspendWhenHidden = FALSE)
 }
 
 shinyApp(ui, server)
