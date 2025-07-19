@@ -2545,7 +2545,6 @@ server <- function(input, output, session) {
     tmpl <- template_data()
     data$studentInfo <- tmpl$studentInfo
     data$groupInfo <- tmpl$groupInfo
-    print(tmpl$fillColor)
     data$fillColor <- tmpl$fillColor
     data$timeBlockInfo <- tmpl$timeBlockInfo
     data$schedule <- tmpl$schedule
