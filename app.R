@@ -8,6 +8,18 @@ library(colourpicker)
 library(shinyTime)
 library(shinyjs)
 library(lubridate)
+
+fraction_to_posix <- function(frac) {
+  if (is.na(frac) || frac == "") return(NULL)
+  h <- floor(frac * 24)
+  m <- round((frac * 24 - h) * 60)
+  if (m == 60) {
+    h <- h + 1
+    m <- 0
+  }
+  strptime(sprintf("2000-01-01 %02d:%02d", h, m), "%Y-%m-%d %H:%M")
+}
+
 # Helper to load all sheets
 load_data <- function(file) {
   list(
@@ -1414,13 +1426,6 @@ server <- function(input, output, session) {
     )
   })
 
-  fraction_to_posix <- function(frac) {
-    if (is.na(frac) || frac == "") return(NULL)
-    h <- floor(frac * 24)
-    m <- round((frac * 24 - h) * 60)
-    strptime(sprintf("%02d:%02d", h, m), "%H:%M")
-  }
-
   updateUInumbersFromUploadedData <- function() {
     req(uploadedTables$tables)
     tables <- uploadedTables$tables
@@ -1489,11 +1494,11 @@ server <- function(input, output, session) {
       arrival_val <- timeBlockInfo$arrivalTime[i]
       end_val <- timeBlockInfo$leaveTime[i]
       if (!is.na(arrival_val)) {
-        arrival_time <- strptime(sprintf("%02d:%02d", floor(arrival_val * 24), round((arrival_val * 24 - floor(arrival_val * 24)) * 60)), "%H:%M")
+        arrival_time <- fraction_to_posix(arrival_val)
         updateTimeInput(session, paste0("tmpl_arrival_", i), value = arrival_time)
       }
       if (!is.na(end_val)) {
-        end_time <- strptime(sprintf("%02d:%02d", floor(end_val * 24), round((end_val * 24 - floor(end_val * 24)) * 60)), "%H:%M")
+        end_time <- fraction_to_posix(end_val)
         updateTimeInput(session, paste0("tmpl_end_", i), value = end_time)
       }
       # Update each time block's start and end
@@ -1503,14 +1508,14 @@ server <- function(input, output, session) {
         if (start_col %in% names(timeBlockInfo)) {
           val <- timeBlockInfo[[start_col]][i]
           if (!is.na(val)) {
-            t <- strptime(sprintf("%02d:%02d", floor(val * 24), round((val * 24 - floor(val * 24)) * 60)), "%H:%M")
+            t <- fraction_to_posix(val)
             updateTimeInput(session, paste0("tmpl_timeblock_", i, "_", tb, "_start"), value = t)
           }
         }
         if (end_col %in% names(timeBlockInfo)) {
           val <- timeBlockInfo[[end_col]][i]
           if (!is.na(val)) {
-            t <- strptime(sprintf("%02d:%02d", floor(val * 24), round((val * 24 - floor(val * 24)) * 60)), "%H:%M")
+            t <- fraction_to_posix(val)
             updateTimeInput(session, paste0("tmpl_timeblock_", i, "_", tb, "_end"), value = t)
           }
         }
@@ -1613,24 +1618,13 @@ server <- function(input, output, session) {
     bordered = TRUE
   )
 
-  fraction_to_time <- function(x) {
-    if (is.na(x) || x == "") return("")
-    h <- floor(x * 24)
-    m <- round((x * 24 - h) * 60)
-    if (m == 60) {
-      h <- h + 1
-      m <- 0
-    }
-    sprintf("%02d:%02d", h, m)
-  }
-
   output$timeBlockInfo <- renderTable({
     req(data$timeBlockInfo)
     df <- data$timeBlockInfo
     # Find columns that are times (arrival, leave, _Start, _End)
     time_cols <- grep("Time$|_Start$|_End$", names(df), value = TRUE)
     for (col in time_cols) {
-      df[[col]] <- sapply(df[[col]], fraction_to_time)
+      df[[col]] <- sapply(df[[col]], fraction_to_posix)
     }
     df
   },
