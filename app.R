@@ -395,6 +395,12 @@ ui <- fluidPage(
           uiOutput("student_schedule_table")
         ),
         tabPanel(
+          "Station Schedule",
+          selectInput("station_group_select", "Select Group", choices = NULL),
+          selectInput("station_select", "Select Station", choices = NULL),
+          uiOutput("station_schedule_table")
+        ),
+        tabPanel(
           "Review data",
           tabsetPanel(
             tabPanel("Schedule Template", uiOutput("schedule")),
@@ -2052,6 +2058,156 @@ server <- function(input, output, session) {
         tagAppendChild(
           tags$style(HTML("
             #student_schedule_table tr th, #student_schedule_table tr td {
+              border: 1px solid #333 !important;
+              padding: 8px 12px !important;
+            }
+          "))
+        )
+    )
+  })
+
+  # Update group choices for station schedule tab
+  observeEvent(data$groupInfo, {
+    req(data$groupInfo)
+    choices <- data$groupInfo$groupNum
+    updateSelectInput(session, "station_group_select", choices = choices)
+  })
+
+  # Update station choices for station schedule tab
+  observeEvent(data$schedule, {
+    req(data$schedule)
+    sched <- data$schedule
+    choices <- setNames(
+      sched$shortKey,
+      sched$niceName
+    )
+
+    updateSelectInput(session, "station_select", choices = choices)
+  })
+
+  # Show selected student's schedule (nice display)
+  output$station_schedule_table <- renderUI({
+    req(data$schedules, input$station_select, input$station_group_select)
+
+    # Parse groupNum and stationNum from selection
+    stationKey <- as.character(input$station_select)
+    niceName <- data$schedule$niceName[data$schedule$shortKey == stationKey]
+    groupNum <- as.character(input$station_group_select)
+
+    # Find the group schedule
+    group_name <- paste0("Group_", groupNum)
+    if (!group_name %in% names(data$schedules)) {
+      return(NULL)
+    }
+
+    sched <- data$schedules[[group_name]]
+
+    group_date <- sched$date
+    group_start <- sched$startTime
+    group_end <- sched$endTime
+
+    station_sched <- sched$wide %>%
+      filter(shortKey == !!stationKey)
+
+    if (nrow(station_sched) == 0) {
+      return(tags$div("No schedule found for this station"))
+    }
+
+    # Extract room1, room2, and notes from the schedule
+    room1 <- station_sched$room1
+    room2 <- station_sched$room2
+    notes <- station_sched$notes
+
+    # Check the faculty assignment mode from the structure 
+    faculty_by_student <- sched$faculty_by_student
+
+    roomFaculty <- NULL
+    if(!faculty_by_student){
+      roomFaculty <- station_sched$faculty
+    }
+
+    timeblock_times <- sched$timeblock_times
+
+    # Get all time blocks for this group
+    long_sched <- sched$long
+    station_sched <- long_sched %>%
+      filter(
+        shortKey == !!stationKey,
+        groupNum == !!groupNum
+      ) %>%
+      arrange(timeBlock)
+
+    # If no schedule, return
+    if (nrow(station_sched) == 0) {
+      return(tags$div("No schedule found for this station"))
+    }
+
+    # Build table rows: one per time block, show time instead of "TimeBlockX"
+    rows <- lapply(seq_len(nrow(station_sched)), function(i) {
+      row <- station_sched[i, ]
+      # Get the time for this time block
+      tb_time <- if (!is.null(timeblock_times[[row$timeBlock]])) timeblock_times[[row$timeBlock]] else row$timeBlock
+      # Compose station info (like template schedule)
+      station_info <- tags$div(
+        if (!is.null(row$studentLabel) && !is.na(row$studentLabel) && row$studentLabel != "") {
+          paste0("Student: ", row$studentLabel)
+        },
+        if (faculty_by_student && !is.null(row$faculty) && !is.na(row$faculty) && row$faculty != "") {
+          list(tags$br(), paste0("Faculty: ", row$faculty))
+        }
+      )
+      # Use student color if present, else stationColor
+      studentNum <- if (!is.null(row$studentNum) && !is.na(row$studentNum)) row$studentNum else NA
+      student_color <- NULL
+      if (!is.na(studentNum) && studentNum %in% data$fillColor$studentNum) {
+        student_color <- data$fillColor$code[data$fillColor$studentNum == studentNum]
+      }
+      station_style <- if (!is.null(student_color) && student_color != "") {
+        paste0("background-color:", student_color, ";")
+      } else {
+        ""
+      }
+      tags$tr(
+        tags$td(tb_time),
+        tags$td(station_info, style = station_style)
+      )
+    })
+
+    # Table header
+    header <- tags$tr(
+      tags$th("Time"),
+      tags$th("Student Info")
+    )
+
+    tagList(
+      tags$div(
+        tags$h4(niceName),
+        tags$p(tags$b("Group #:"), groupNum),
+        if (!is.null(room1) && !is.na(room1) && room1 != "") {
+          tags$p(tags$b("Room:"), room1)
+        },
+        if (!is.null(room2) && !is.na(room2) && room2 != "") {
+          tags$p(tags$b("Additional Room:"), room2)
+        },
+        if( !faculty_by_student && !is.null(roomFaculty) && !is.na(roomFaculty) && roomFaculty != "") {
+          tags$p(tags$b("Faculty:"), roomFaculty)
+        },
+        tags$p(tags$b("Date:"), format(as.Date(group_date), "%A, %B %d, %Y")),
+        tags$p(tags$b("Start time:"), format(strptime(format(as_hms(as.numeric(group_start) * 86400)), "%H:%M:%S"), "%I:%M %p")),
+        tags$p(tags$b("End time:"), format(strptime(format(as_hms(as.numeric(group_end) * 86400)), "%H:%M:%S"), "%I:%M %p")),
+        if (!is.null(notes) && !is.na(notes) && notes != "") {
+          tags$p(tags$b("Notes:"), notes)
+        }
+      ),
+      tags$table(
+        id = "station_schedule_table",  # <-- Added ID here
+        style = "border-collapse:collapse;width:100%;margin:auto;",
+        tags$thead(header),
+        tags$tbody(rows)
+      ) %>%
+        tagAppendChild(
+          tags$style(HTML("
+            #station_schedule_table tr th, #station_schedule_table tr td {
               border: 1px solid #333 !important;
               padding: 8px 12px !important;
             }
