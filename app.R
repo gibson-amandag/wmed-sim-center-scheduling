@@ -199,10 +199,11 @@ ui <- fluidPage(
       h3("Option (b)"),
       p("Upload an existing Excel template and then edit within the Enter Info and Station Assignments tab as desired"),
       fileInput("file", "Upload Template", accept = ".xlsx", width = "100%"),
-      p(
-        "Be sure to check the uploaded information for any errors, such as incorrect group names, or double assignments",
-        style = "color: red;"
-      ),
+      # p(
+      #   "Be sure to check the uploaded information for any errors, such as incorrect group names, or double assignments",
+      #   style = "color: red;"
+      # ),
+      uiOutput("any_errors_warning"),
       h2("Step 2:"),
       p("Click the button below to load the entered information and generate schedules"),
       p(
@@ -419,6 +420,12 @@ server <- function(input, output, session) {
   )
 
   uploadedTables <- reactiveValues()
+
+  anyErrors <- reactiveValues(
+    duplicateStudentNums = FALSE,
+    studentWarnings = FALSE,
+    duplicateStations = FALSE
+  )
 
   ##############################
   ## Observers for template inputs
@@ -935,13 +942,18 @@ server <- function(input, output, session) {
           names = paste(paste0(df$firstName[rows], " ", df$lastName[rows], " (row ", rows, ")"), collapse = ", ")
         )
       }))
+      anyErrors$duplicateStudentNums <- TRUE  # Set error flag if duplicates found
       return(result)
     } else {
+      anyErrors$duplicateStudentNums <- FALSE  # Clear error flag if no duplicates
       return(NULL)
     }
   }
 
   output$tmpl_student_warning_ui <- renderUI({
+    # React to group name changes
+    req(input$tmpl_num_groups)
+    group_names <- sapply(seq_len(input$tmpl_num_groups), function(i) input[[paste0("tmpl_group_", i, "_groupNum")]])
     df <- tmpl_students()
     dups <- check_duplicate_student_numbers(df)
   
@@ -1009,8 +1021,10 @@ server <- function(input, output, session) {
     }
   
     if (length(warnings) > 0) {
+      anyErrors$studentWarnings <- TRUE
       tagList(warnings)
     } else {
+      anyErrors$studentWarnings <- FALSE
       NULL
     }
   })
@@ -1191,6 +1205,9 @@ server <- function(input, output, session) {
           tags$ul(lapply(warnings, tags$li))
         )
       )
+      anyErrors$duplicateStations <- TRUE
+    } else {
+      anyErrors$duplicateStations <- FALSE
     }
   })
 
@@ -1298,6 +1315,27 @@ server <- function(input, output, session) {
     })
   
     tagList(group_panels)
+  })
+
+  output$any_errors_warning <- renderUI({
+    if (anyErrors$duplicateStudentNums) {
+      div(
+        style = "color: #b30000; font-weight: bold; margin-bottom: 10px;",
+        "Warning: Duplicate group/student number pairs found. Please resolve these before proceeding."
+      )
+    } else if (anyErrors$studentWarnings) {
+      div(
+        style = "color: #b30000; font-weight: bold; margin-bottom: 10px;",
+        "Warning: There are issues with the student data. Please check the warnings in the student information tab."
+      )
+    } else if (anyErrors$duplicateStations) {
+      div(
+        style = "color: #b30000; font-weight: bold; margin-bottom: 10px;",
+        "Warning: Some students are assigned to multiple stations in the same block. Please resolve these before proceeding."
+      )
+    } else {
+      NULL
+    }
   })
   
   #######################
@@ -2349,7 +2387,7 @@ server <- function(input, output, session) {
       studentNum = seq_len(max_students),
       code = sapply(seq_len(max_students), function(i) {
         key <- paste0("tmpl_student_color_", i)
-        val <- isolate(input[[key]])
+        val <- tmpl_fillColor$colors[[key]]
         if (is.null(val) || val == "") "#FFFFFF" else val
       }),
       stringsAsFactors = FALSE
@@ -2502,9 +2540,11 @@ server <- function(input, output, session) {
     update_tmpl_group_info()
     update_tmpl_station_info()
     update_faculty_assignments()
+    update_tmpl_fillColor()
     tmpl <- template_data()
     data$studentInfo <- tmpl$studentInfo
     data$groupInfo <- tmpl$groupInfo
+    print(tmpl$fillColor)
     data$fillColor <- tmpl$fillColor
     data$timeBlockInfo <- tmpl$timeBlockInfo
     data$schedule <- tmpl$schedule
@@ -2517,6 +2557,7 @@ server <- function(input, output, session) {
   outputOptions(output, "tmpl_group_info_ui", suspendWhenHidden = FALSE)
   outputOptions(output, "tmpl_student_colors_ui", suspendWhenHidden = FALSE)
   outputOptions(output, "tmpl_student_overflow_warning", suspendWhenHidden = FALSE)
+  outputOptions(output, "tmpl_student_warning_ui", suspendWhenHidden = FALSE)
   outputOptions(output, "tmpl_student_table", suspendWhenHidden = FALSE)
   outputOptions(output, "tmpl_station_info_ui", suspendWhenHidden = FALSE)
   outputOptions(output, "tmpl_schedule_ui", suspendWhenHidden = FALSE)
