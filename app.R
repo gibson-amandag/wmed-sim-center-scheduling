@@ -1205,7 +1205,7 @@ server <- function(input, output, session) {
     })
   
     tags$div(
-      style = "max-height: 400px; overflow-x: auto; overflow-y: auto; border:1px solid #ccc; border-radius:4px; padding:8px; background:#fff;",
+      style = "overflow-x: auto; overflow-y: auto; border:1px solid #ccc; border-radius:4px; padding:8px; background:#fff;",
       tags$table(
         style = "width:100%; border-collapse:collapse;border:",
         tags$thead(header),
@@ -1265,6 +1265,7 @@ server <- function(input, output, session) {
       anyErrors$duplicateStations <- TRUE
     } else {
       anyErrors$duplicateStations <- FALSE
+      NULL
     }
   })
 
@@ -2286,11 +2287,16 @@ server <- function(input, output, session) {
       wb <- createWorkbook()
 
       # --- Add template sheets first ---
+      update_tmpl_starttime_names()
+      update_tmpl_group_info()
+      update_tmpl_station_info()
+      update_faculty_assignments()
+      update_tmpl_fillColor()
       tmpl <- template_data()
       addWorksheet(wb, "studentInfo")
-      writeData(wb, "studentInfo", tmpl$studentInfo)
+      writeDataTable(wb, "studentInfo", tmpl$studentInfo, tableStyle = "TableStyleLight1")
       addWorksheet(wb, "groupInfo")
-      writeData(wb, "groupInfo", tmpl$groupInfo)
+      writeDataTable(wb, "groupInfo", tmpl$groupInfo, tableStyle = "TableStyleLight1")
       addWorksheet(wb, "fillColor")
       writeData(wb, "fillColor", tmpl$fillColor)
       # Color the fillColor cells
@@ -2308,7 +2314,7 @@ server <- function(input, output, session) {
         }
       }
       addWorksheet(wb, "timeBlockInfo")
-      writeData(wb, "timeBlockInfo", tmpl$timeBlockInfo)
+      writeDataTable(wb, "timeBlockInfo", tmpl$timeBlockInfo, tableStyle = "TableStyleLight1")
       time_style <- createStyle(numFmt = "hh:mm")
       time_cols <- which(grepl("Time$|_Start$|_End$", names(tmpl$timeBlockInfo)))
       addStyle(
@@ -2318,9 +2324,9 @@ server <- function(input, output, session) {
         gridExpand = TRUE, stack = TRUE
       )
       addWorksheet(wb, "schedule")
-      writeData(wb, "schedule", tmpl$schedule)
+      writeDataTable(wb, "schedule", tmpl$schedule, tableStyle = "TableStyleLight1")
       addWorksheet(wb, "faculty")
-      writeData(wb, "faculty", tmpl$faculty)
+      writeDataTable(wb, "faculty", tmpl$faculty, tableStyle = "TableStyleLight1")
 
       for (name in names(data$schedules)) {
         sched <- data$schedules[[name]]
