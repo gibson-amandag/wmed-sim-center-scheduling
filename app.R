@@ -6,6 +6,7 @@ library(openxlsx)
 library(zip)
 library(colourpicker)
 library(shinyTime)
+library(shinyjs)
 # Helper to load all sheets
 load_data <- function(file) {
   list(
@@ -173,6 +174,7 @@ generate_group_schedules <- function(data) {
 }
 
 get_start_time_label <- function(index, start_time_names) {
+  if (is.null(index) || is.na(index) || index == "") return(NA)
   idx <- suppressWarnings(as.integer(index))
   if (!is.na(idx) && idx >= 1 && idx <= length(start_time_names)) {
     return(start_time_names[idx])
@@ -183,6 +185,7 @@ get_start_time_label <- function(index, start_time_names) {
 
 # UI
 ui <- fluidPage(
+  useShinyjs(),
   titlePanel("Schedule Generator"),
   helpText("Note: When entering numbers, be careful about scrolling over the input box, as it may change the value."),
   fluidRow(
@@ -196,6 +199,11 @@ ui <- fluidPage(
       h3("Option (b)"),
       p("Upload an existing Excel template and then edit within the Enter Info and Station Assignments tab as desired"),
       fileInput("file", "Upload Template", accept = ".xlsx", width = "100%"),
+      # p(
+      #   "Be sure to check the uploaded information for any errors, such as incorrect group names, or double assignments",
+      #   style = "color: red;"
+      # ),
+      uiOutput("any_errors_warning"),
       h2("Step 2:"),
       p("Click the button below to load the entered information and generate schedules"),
       p(
@@ -382,7 +390,10 @@ server <- function(input, output, session) {
 
   data <- reactiveValues()
 
-  # --- NEW: Store template labels/times in reactiveValues ---
+  #########################
+  ## Template Inputs
+  #########################
+  # --- Start times ---
   tmpl_inputs <- reactiveValues(
     starttime_names = list(),
     timeblock_times = list(),
@@ -390,8 +401,35 @@ server <- function(input, output, session) {
     end_times = list()
   )
 
-  # --- NEW: Store group info in reactiveValues ---
+  # --- Group Info ---
   tmpl_group_info <- reactiveValues(groups = list())
+
+  # --- Fill Color ---
+  tmpl_fillColor <- reactiveValues(colors = list())
+
+  # ---  Student info ---------
+  tmpl_students <- reactiveVal(NULL)
+
+  # --- Station Info ---
+  tmpl_station_info <- reactiveValues(stations = list())
+
+  # --- Faculty Assignments ---
+  faculty_assignments <- reactiveValues(
+    by_room = list(),   # by_room[[group]][[station]] = faculty name
+    by_student = list() # by_student[[group]][[studentNum]] = faculty name
+  )
+
+  uploadedTables <- reactiveValues()
+
+  anyErrors <- reactiveValues(
+    duplicateStudentNums = FALSE,
+    studentWarnings = FALSE,
+    duplicateStations = FALSE
+  )
+
+  ##############################
+  ## Observers for template inputs
+  ##############################
 
   # --- Observe and update start time labels ---
   update_tmpl_starttime_names <- function() {
@@ -425,7 +463,7 @@ server <- function(input, output, session) {
   })
 
   # --- Observe and update time block times ---
-  observe({
+  update_tmpl_timeblock_times <- function (){
     req(input$tmpl_num_timeblocks, input$tmpl_num_starttimes)
     n_tb <- input$tmpl_num_timeblocks
     n_st <- input$tmpl_num_starttimes
@@ -452,6 +490,10 @@ server <- function(input, output, session) {
       to_remove <- setdiff(names(tmpl_inputs$timeblock_times), valid_keys)
       tmpl_inputs$timeblock_times[to_remove] <- NULL
     })
+  }
+
+  observe({
+    update_tmpl_timeblock_times()
   })
 
   # --- Observe and update group info ---
@@ -480,29 +522,124 @@ server <- function(input, output, session) {
       }
     })
   }
+
   observe({
     req(input$tmpl_num_groups, input$tmpl_num_starttimes)
     n <- input$tmpl_num_groups
     update_tmpl_group_info()
   })
 
-  # --- UI for start time names ---
+  # --- Observe and update fill colors ---
+  update_tmpl_fillColor <- function() {
+    req(input$tmpl_max_students)
+    n <- input$tmpl_max_students
+    isolate({
+      for (i in seq_len(n)) {
+        key <- paste0("tmpl_student_color_", i)
+        val <- input[[key]]
+        if (!is.null(val)) tmpl_fillColor$colors[[key]] <- val
+      }
+      # Remove any extra if n decreased
+      to_remove <- setdiff(names(tmpl_fillColor$colors), paste0("tmpl_student_color_", seq_len(n)))
+      tmpl_fillColor$colors[to_remove] <- NULL
+    })
+  }
+  
+  observe({
+    update_tmpl_fillColor()
+  })
+
+  # --- Observe and update station info ---
+  update_tmpl_station_info <- function() {
+    req(input$tmpl_num_stations)
+    n <- input$tmpl_num_stations
+    isolate({
+      for (i in seq_len(n)) {
+        prefix <- paste0("tmpl_station_", i, "_")
+        tmpl_station_info$stations[[i]] <- list(
+          shortKey = input[[paste0(prefix, "shortKey")]],
+          niceName = input[[paste0(prefix, "niceName")]],
+          timeInMin = input[[paste0(prefix, "timeInMin")]],
+          room1 = input[[paste0(prefix, "room1")]],
+          room2 = input[[paste0(prefix, "room2")]],
+          notes = input[[paste0(prefix, "notes")]],
+          stationColor = input[[paste0(prefix, "stationColor")]]
+        )
+      }
+      # Remove extras if n decreased
+      if (length(tmpl_station_info$stations) > n) {
+        tmpl_station_info$stations <- tmpl_station_info$stations[seq_len(n)]
+      }
+    })
+  }
+
+  # Save station info reactively
+  observe({
+    update_tmpl_station_info()
+  })
+  
+  # --- Faculty Assignment Update Function ---
+  update_faculty_assignments <- function() {
+    isolate({
+      req(input$tmpl_num_groups, input$tmpl_num_stations, input$tmpl_max_students)
+      if (input$faculty_assign_mode == "room") {
+        for (g in seq_len(input$tmpl_num_groups)) {
+          for (i in seq_len(input$tmpl_num_stations)) {
+            inputId <- paste0("faculty_room_", g, "_", i)
+            val <- input[[inputId]]
+            if (!is.null(val)) {
+              if (is.null(faculty_assignments$by_room[[as.character(g)]])) faculty_assignments$by_room[[as.character(g)]] <- list()
+              faculty_assignments$by_room[[as.character(g)]][[as.character(i)]] <- val
+            }
+          }
+        }
+      } else {
+        for (g in seq_len(input$tmpl_num_groups)) {
+          for (s in seq_len(input$tmpl_max_students)) {
+            inputId <- paste0("faculty_student_", g, "_", s)
+            val <- input[[inputId]]
+            if (!is.null(val)) {
+              if (is.null(faculty_assignments$by_student[[as.character(g)]])) faculty_assignments$by_student[[as.character(g)]] <- list()
+              faculty_assignments$by_student[[as.character(g)]][[as.character(s)]] <- val
+            }
+          }
+        }
+      }
+    })
+  }
+  
+  # --- Faculty Assignment Observers ---
+  observe({
+    update_faculty_assignments()
+  })
+
+
+  ###########################
+  ## Build UI elements
+  ###########################
+
+  # Start time UI
   output$tmpl_starttime_names_ui <- renderUI({
     req(input$tmpl_num_starttimes)
     n <- input$tmpl_num_starttimes
+
     isolate({
+      # Always use tmpl_inputs, not upload
+      starttime_names <- tmpl_inputs$starttime_names
+      arrival_times <- tmpl_inputs$arrival_times
+      end_times <- tmpl_inputs$end_times
       fluidRow(
         column(12, helpText("Enter times as hh:mm (24-hour format, e.g. 07:30 and 17:15)")),
         lapply(seq_len(n), function(i) {
           key <- paste0("tmpl_starttime_name_", i)
-          val <- if (!is.null(tmpl_inputs$starttime_names[[key]])) {
-            tmpl_inputs$starttime_names[[key]]
+          val <- if (!is.null(starttime_names[[key]])) {
+            starttime_names[[key]]
           } else if (i == 1) "AM" else if (i == 2) "PM" else paste0("Start", i)
           # Use stored values if available
           arrival_key <- paste0("tmpl_arrival_", i)
           end_key <- paste0("tmpl_end_", i)
-          stored_arrival <- tmpl_inputs$arrival_times[[arrival_key]]
-          stored_end <- tmpl_inputs$end_times[[end_key]]
+          stored_arrival <- arrival_times[[arrival_key]]
+          stored_end <- end_times[[end_key]]
           default_arrival <- if (i == 1) strptime("07:30", "%H:%M") else if (i == 2) strptime("12:30", "%H:%M") else strptime("08:00", "%H:%M")
           default_end <- if (i == 1) strptime("12:15", "%H:%M") else if (i == 2) strptime("17:15", "%H:%M") else strptime("12:00", "%H:%M")
           tagList(
@@ -526,12 +663,19 @@ server <- function(input, output, session) {
     req(input$tmpl_num_timeblocks, input$tmpl_num_starttimes)
     n_tb <- input$tmpl_num_timeblocks
     n_st <- input$tmpl_num_starttimes
-    start_names <- sapply(seq_len(n_st), function(i) {
+    buildTimeblockUI(n_st, n_tb)
+  })
+
+  buildTimeblockUI <- function(num_starttimes, num_timeblocks){
+    update_tmpl_timeblock_times()
+
+    start_names <- sapply(seq_len(num_starttimes), function(i) {
       key <- paste0("tmpl_starttime_name_", i)
-      if (!is.null(tmpl_inputs$starttime_names[[key]])) tmpl_inputs$starttime_names[[key]] else if (i == 1) "AM" else if (i == 2) "PM" else paste0("Start", i)
+      if (!is.null(tmpl_inputs$starttime_names[[key]])) tmpl_inputs$starttime_names[[key]]
+      else if (i == 1) "AM" else if (i == 2) "PM" else paste0("Start", i)
     })
     fluidRow(
-      lapply(seq_len(n_st), function(st_idx) {
+      lapply(seq_len(num_starttimes), function(st_idx) {
         column(
           6,
           fluidRow(
@@ -550,10 +694,12 @@ server <- function(input, output, session) {
               )
             )
           ),
-          lapply(seq_len(n_tb), function(tb_idx) {
+          lapply(seq_len(num_timeblocks), function(tb_idx) {
             start_key <- paste0("tmpl_timeblock_", st_idx, "_", tb_idx, "_start")
             end_key <- paste0("tmpl_timeblock_", st_idx, "_", tb_idx, "_end")
             label <- start_names[st_idx]
+            stored_start <- tmpl_inputs$timeblock_times[[start_key]]
+            stored_end <- tmpl_inputs$timeblock_times[[end_key]]
             if (tolower(label) == "am") {
               start_minutes <- 8 * 60 + (tb_idx - 1) * 30
               end_minutes <- start_minutes + 30
@@ -568,8 +714,6 @@ server <- function(input, output, session) {
               default_start <- NA
               default_end <- NA
             }
-            stored_start <- tmpl_inputs$timeblock_times[[start_key]]
-            stored_end <- tmpl_inputs$timeblock_times[[end_key]]
             fluidRow(
               column(
                 6,
@@ -584,12 +728,14 @@ server <- function(input, output, session) {
         )
       })
     )
-  })
+  }
 
   # --- UI for group info entry ---
   output$tmpl_group_info_ui <- renderUI({
     req(input$tmpl_num_groups, input$tmpl_num_starttimes)
     n <- input$tmpl_num_groups
+
+    # Get names from tmpl_inputs
     start_time_names <- sapply(seq_len(input$tmpl_num_starttimes), function(i) {
       key <- paste0("tmpl_starttime_name_", i)
       nm <- tmpl_inputs$starttime_names[[key]]
@@ -597,68 +743,67 @@ server <- function(input, output, session) {
     })
     # Create named vector: values = index, names = label
     time_of_day_choices <- setNames(as.character(seq_along(start_time_names)), start_time_names)
-    isolate({
-      tagList(
-        lapply(seq_len(n), function(i) {
-          prefix <- paste0("tmpl_group_", i, "_")
-          group <- tmpl_group_info$groups[[i]]
-          groupNum_val <- if (!is.null(group) && !is.null(group$groupNum)) group$groupNum else paste0("Group ", i)
-          date_val <- if (!is.null(group) && !is.null(group$date)) group$date else NULL
-          startTime_val <- if (!is.null(group) && !is.null(group$startTime)) group$startTime else ""
-          endTime_val <- if (!is.null(group) && !is.null(group$endTime)) group$endTime else ""
-          # Default to index as value
-          timeOfDay_val <- if (!is.null(group) && !is.null(group$timeOfDay) && group$timeOfDay %in% as.character(seq_along(start_time_names))) {
-            group$timeOfDay
-          } else {
-            as.character(i)
-          }
-          # print(
-          #   str(timeOfDay_val),
-          #   str(get_start_time_label(timeOfDay_val, start_time_names))
-          # )
-          fluidRow(
-            column(4, textInput(paste0(prefix, "groupNum"), paste0("Group ", i, " Name"), value = groupNum_val)),
-            column(4, dateInput(paste0(prefix, "date"), "Date", value = if (!is.null(date_val)) date_val else NULL)),
-            column(4, selectInput(paste0(prefix, "timeOfDay"), "Time of Day", choices = time_of_day_choices, selected = timeOfDay_val))
-          )
-        })
-      )
-    })
+    tagList(
+      lapply(seq_len(n), function(i) {
+        prefix <- paste0("tmpl_group_", i, "_")
+        group <- tmpl_group_info$groups[[i]]
+        groupNum_val <- if (!is.null(group) && !is.null(group$groupNum)) group$groupNum else paste0("Group ", i)
+        date_val <- if (!is.null(group) && !is.null(group$date)) group$date else NULL
+        startTime_val <- if (!is.null(group) && !is.null(group$startTime)) group$startTime else ""
+        endTime_val <- if (!is.null(group) && !is.null(group$endTime)) group$endTime else ""
+        # Default to index as value
+        timeOfDay_val <- if (!is.null(group) && !is.null(group$timeOfDay) && group$timeOfDay %in% as.character(seq_along(start_time_names))) {
+          group$timeOfDay
+        } else {
+          as.character(i)
+        }
+        fluidRow(
+          column(4, textInput(paste0(prefix, "groupNum"), paste0("Group ", i, " Name"), value = groupNum_val)),
+          column(4, dateInput(paste0(prefix, "date"), "Date", value = if (!is.null(date_val)) date_val else NULL)),
+          column(4, selectInput(paste0(prefix, "timeOfDay"), "Time of Day", choices = time_of_day_choices, selected = timeOfDay_val))
+        )
+      })
+    )
   })
 
   # --- UI for student color pickers ---
   output$tmpl_student_colors_ui <- renderUI({
-    req(input$tmpl_max_students)
-    n <- input$tmpl_max_students
-    # Default colors (repeat if needed)
-    default_colors <- c(
-      "#FF7C80", "#FFA365", "#FFFF00", "#AEFF5D", "#A6A200", "#97CBFF",
-      "#9797FF", "#FAB3FF", "#CC66FF", "#D4D2D2", "#FFE285", "#B3773B",
-      "#85FFDF", "#25C6FF", "#6B9572", "#FF8FDA", "#93AA00", "#593315",
-      "#F13A13", "#232C16"
-    )
-    tagList(
-      fluidRow(
-        column(12, h4("Student Colors (for fillColor sheet)"))
-      ),
-      fluidRow(
-        lapply(seq_len(n), function(i) {
-          key <- paste0("tmpl_student_color_", i)
-          val <- isolate(input[[key]])
-          default_val <- if (!is.null(val)) val else default_colors[(i - 1) %% length(default_colors) + 1]
-          column(
-            4,
-            tags$div(
-              paste("Student", i),
-              colourpicker::colourInput(key, NULL, value = default_val, showColour = "both")
-            )
-          )
-        })
+      req(input$tmpl_max_students)
+      n <- input$tmpl_max_students
+  
+      # Always use tmpl_fillColor, not upload
+      default_colors <- c(
+        "#FF7C80", "#FFA365", "#FFFF00", "#AEFF5D", "#A6A200", "#97CBFF",
+        "#9797FF", "#FAB3FF", "#CC66FF", "#D4D2D2", "#FFE285", "#B3773B",
+        "#85FFDF", "#25C6FF", "#6B9572", "#FF8FDA", "#93AA00", "#593315",
+        "#F13A13", "#232C16"
       )
-    )
+  
+      tagList(
+        fluidRow(
+          column(12, h4("Student Colors (for fillColor sheet)"))
+        ),
+        fluidRow(
+          lapply(seq_len(n), function(i) {
+            key <- paste0("tmpl_student_color_", i)
+            # Priority: tmpl_fillColor > input > default
+            if (!is.null(tmpl_fillColor$colors[[key]])) {
+              val <- tmpl_fillColor$colors[[key]]
+            } else {
+              val <- isolate(input[[key]])
+            }
+            default_val <- if (!is.null(val) && val != "") val else default_colors[(i - 1) %% length(default_colors) + 1]
+            column(
+              4,
+              tags$div(
+                paste("Student", i),
+                colourpicker::colourInput(key, NULL, value = default_val, showColour = "both")
+              )
+            )
+          })
+        )
+      )
   })
-
-  tmpl_students <- reactiveVal(NULL)
 
   output$tmpl_student_overflow_warning <- renderUI({
     req(input$tmpl_total_students, input$tmpl_num_groups, input$tmpl_max_students)
@@ -797,18 +942,24 @@ server <- function(input, output, session) {
           names = paste(paste0(df$firstName[rows], " ", df$lastName[rows], " (row ", rows, ")"), collapse = ", ")
         )
       }))
+      anyErrors$duplicateStudentNums <- TRUE  # Set error flag if duplicates found
       return(result)
     } else {
+      anyErrors$duplicateStudentNums <- FALSE  # Clear error flag if no duplicates
       return(NULL)
     }
   }
 
   output$tmpl_student_warning_ui <- renderUI({
+    # React to group name changes
+    req(input$tmpl_num_groups)
+    group_names <- sapply(seq_len(input$tmpl_num_groups), function(i) input[[paste0("tmpl_group_", i, "_groupNum")]])
     df <- tmpl_students()
     dups <- check_duplicate_student_numbers(df)
   
     # Check for groupNum not in groupInfo
     groupInfo_names <- NULL
+    update_tmpl_group_info()
     if (!is.null(tmpl_group_info$groups) && length(tmpl_group_info$groups) > 0) {
       groupInfo_names <- sapply(tmpl_group_info$groups, function(g) {
         if (!is.null(g$groupNum) && g$groupNum != "") as.character(g$groupNum) else NA
@@ -870,8 +1021,10 @@ server <- function(input, output, session) {
     }
   
     if (length(warnings) > 0) {
+      anyErrors$studentWarnings <- TRUE
       tagList(warnings)
     } else {
+      anyErrors$studentWarnings <- FALSE
       NULL
     }
   })
@@ -900,7 +1053,6 @@ server <- function(input, output, session) {
     tmpl_students(new_df)
   })
 
-  tmpl_station_info <- reactiveValues(stations = list())
 
   output$tmpl_station_info_ui <- renderUI({
     req(input$tmpl_num_stations)
@@ -944,34 +1096,6 @@ server <- function(input, output, session) {
         })
       )
     )
-  })
-
-  update_tmpl_station_info <- function() {
-    req(input$tmpl_num_stations)
-    n <- input$tmpl_num_stations
-    isolate({
-      for (i in seq_len(n)) {
-        prefix <- paste0("tmpl_station_", i, "_")
-        tmpl_station_info$stations[[i]] <- list(
-          shortKey = input[[paste0(prefix, "shortKey")]],
-          niceName = input[[paste0(prefix, "niceName")]],
-          timeInMin = input[[paste0(prefix, "timeInMin")]],
-          room1 = input[[paste0(prefix, "room1")]],
-          room2 = input[[paste0(prefix, "room2")]],
-          notes = input[[paste0(prefix, "notes")]],
-          stationColor = input[[paste0(prefix, "stationColor")]]
-        )
-      }
-      # Remove extras if n decreased
-      if (length(tmpl_station_info$stations) > n) {
-        tmpl_station_info$stations <- tmpl_station_info$stations[seq_len(n)]
-      }
-    })
-  }
-
-  # Save station info reactively
-  observe({
-    update_tmpl_station_info()
   })
 
   output$tmpl_schedule_ui <- renderUI({
@@ -1081,6 +1205,9 @@ server <- function(input, output, session) {
           tags$ul(lapply(warnings, tags$li))
         )
       )
+      anyErrors$duplicateStations <- TRUE
+    } else {
+      anyErrors$duplicateStations <- FALSE
     }
   })
 
@@ -1095,6 +1222,126 @@ server <- function(input, output, session) {
     }
   })
 
+  # --- Faculty Assignment UI ---
+  output$faculty_assignment_ui <- renderUI({
+    req(input$tmpl_num_groups, input$tmpl_num_stations, input$tmpl_max_students)
+    num_groups <- input$tmpl_num_groups
+    num_stations <- input$tmpl_num_stations
+    max_students <- input$tmpl_max_students
+
+    num_starttimes <- input$tmpl_num_starttimes
+
+    # Get start time names from tmpl_inputs
+    start_time_names <- sapply(seq_len(num_starttimes), function(i) {
+      key <- paste0("tmpl_starttime_name_", i)
+      nm <- tmpl_inputs$starttime_names[[key]]
+      if (is.null(nm) || nm == "") paste0("Start", i) else nm
+    })
+
+    update_tmpl_group_info()
+    group_panels <- lapply(seq_len(num_groups), function(g) {
+      group_label <- paste("Group", g)
+      group_date <- input[[paste0("tmpl_group_", g, "_date")]]
+      group_timeOfDay <- input[[paste0("tmpl_group_", g, "_timeOfDay")]]
+      time_label <- get_start_time_label(group_timeOfDay, start_time_names)
+
+      group_heading <- tags$h4(
+        group_label,
+        if (!is.null(group_date) && !is.na(group_date)) {
+          paste0(" (", format(as.Date(group_date), "%A, %B %d, %Y"),
+                if (!is.null(time_label) && !is.na(time_label)) paste0(", ", time_label) else "",
+                ")")
+        }
+      )
+  
+      if (input$faculty_assign_mode == "room") {
+        # By room: Table for this group, stations as rows
+        station_names <- sapply(seq_len(num_stations), function(i) {
+          val <- input[[paste0("tmpl_station_", i, "_niceName")]]
+          if (is.null(val) || val == "") paste0("Station ", i) else val
+        })
+        rows <- lapply(seq_len(num_stations), function(i) {
+          inputId <- paste0("faculty_room_", g, "_", i)
+          val <- NULL
+          if (!is.null(faculty_assignments$by_room[[as.character(g)]])) {
+            val <- faculty_assignments$by_room[[as.character(g)]][[as.character(i)]]
+          }
+          if (is.null(val)) val <- ""
+          tags$tr(
+            tags$td(station_names[i]),
+            tags$td(textInput(inputId, NULL, value = val, width = "100%"))
+          )
+        })
+        table_ui <- tags$table(
+          style = "width:100%; margin-bottom: 16px;",
+          tags$thead(
+            tags$tr(
+              tags$th("Station"),
+              tags$th("Faculty")
+            )
+          ),
+          tags$tbody(rows)
+        )
+      } else {
+        # By student: Table for this group, student numbers as rows
+        rows <- lapply(seq_len(max_students), function(s) {
+          inputId <- paste0("faculty_student_", g, "_", s)
+          val <- NULL
+          if (!is.null(faculty_assignments$by_student[[as.character(g)]])) {
+            val <- faculty_assignments$by_student[[as.character(g)]][[as.character(s)]]
+          }
+          if (is.null(val)) val <- ""
+          tags$tr(
+            tags$td(s),
+            tags$td(textInput(inputId, NULL, value = val, width = "100%"))
+          )
+        })
+        table_ui <- tags$table(
+          style = "width:100%; margin-bottom: 16px;",
+          tags$thead(
+            tags$tr(
+              tags$th("Student #"),
+              tags$th("Faculty")
+            )
+          ),
+          tags$tbody(rows)
+        )
+      }
+      tags$div(
+        style = "margin-bottom: 32px; border: 1px solid #ccc; border-radius: 6px; padding: 12px;",
+        group_heading,
+        table_ui
+      )
+    })
+  
+    tagList(group_panels)
+  })
+
+  output$any_errors_warning <- renderUI({
+    if (anyErrors$duplicateStudentNums) {
+      div(
+        style = "color: #b30000; font-weight: bold; margin-bottom: 10px;",
+        "Warning: Duplicate group/student number pairs found. Please resolve these before proceeding."
+      )
+    } else if (anyErrors$studentWarnings) {
+      div(
+        style = "color: #b30000; font-weight: bold; margin-bottom: 10px;",
+        "Warning: There are issues with the student data. Please check the warnings in the student information tab."
+      )
+    } else if (anyErrors$duplicateStations) {
+      div(
+        style = "color: #b30000; font-weight: bold; margin-bottom: 10px;",
+        "Warning: Some students are assigned to multiple stations in the same block. Please resolve these before proceeding."
+      )
+    } else {
+      NULL
+    }
+  })
+  
+  #######################
+  ## File upload handling
+  #######################
+
   observeEvent(input$file, {
     req(input$file)
     tables <- load_data(input$file$datapath)
@@ -1104,7 +1351,212 @@ server <- function(input, output, session) {
     data$timeBlockInfo <- tables$timeBlockInfo
     data$schedule <- tables$schedule
     data$faculty <- tables$faculty
+
+    uploadedTables$tables <- tables
+
+    updateUInumbersFromUploadedData()
+
+    delay(
+      1000,
+      {
+        updateTimeInfoFromUploadedData(tables$timeBlockInfo)
+        delay(
+          100,
+          {
+            updateGroupInfoFromUploadedData(tables$groupInfo, tables$timeBlockInfo$startTimeLabel)
+            updateStudentColorsFromUploadedData(tables$fillColor)
+            delay(
+              100,
+              {
+                updateStudentTableFromUploadedData(tables$studentInfo)
+                delay(
+                  100,
+                  {
+                    updateStationInfoFromUploadedData(tables$schedule)
+                    delay(
+                      300,
+                      {
+                        updateFacultyInfoFromUploadedData(tables$faculty)
+                        delay(
+                          100, 
+                          {
+                            updateStationAssignmentsFromUploadedData(tables$schedule)
+                          }
+                        )
+                      }
+                    )
+                  }
+                )
+              }
+            )
+          }
+        )
+      }
+    )
   })
+
+  fraction_to_posix <- function(frac) {
+    if (is.na(frac) || frac == "") return(NULL)
+    h <- floor(frac * 24)
+    m <- round((frac * 24 - h) * 60)
+    strptime(sprintf("%02d:%02d", h, m), "%H:%M")
+  }
+
+  updateUInumbersFromUploadedData <- function() {
+    req(uploadedTables$tables)
+    tables <- uploadedTables$tables
+
+    # Update numeric inputs based on uploaded data
+    updateNumericInput(session, "tmpl_num_starttimes", value = nrow(tables$timeBlockInfo))
+    updateNumericInput(session, "tmpl_num_timeblocks", value = length(grep("^Block[0-9]+_Start$", names(tables$timeBlockInfo))))
+    updateNumericInput(session, "tmpl_num_groups", value = nrow(tables$groupInfo))
+    updateNumericInput(session, "tmpl_max_students", value = max(as.integer(tables$studentInfo$studentNum), na.rm = TRUE))
+    updateNumericInput(session, "tmpl_total_students", value = nrow(tables$studentInfo))
+    updateNumericInput(session, "tmpl_num_stations", value = nrow(tables$schedule))
+
+    # Update faculty radio button based on uploaded faculty table columns
+    if (!is.null(tables$faculty)) {
+      faculty_cols <- names(tables$faculty)
+      if (all(c("groupNum", "studentNum", "faculty") %in% faculty_cols)) {
+        updateRadioButtons(session, "faculty_assign_mode", selected = "student")
+      } else if (any(grepl("^group[0-9]+$", faculty_cols))) {
+        updateRadioButtons(session, "faculty_assign_mode", selected = "room")
+      }
+    }
+  }
+
+   updateStudentTableFromUploadedData <- function(studentInfo) {
+    # Create a new data frame with the correct columns
+    new_students <- data.frame(
+      lastName = studentInfo$lastName,
+      firstName = studentInfo$firstName,
+      groupNum = as.character(studentInfo$groupNum),
+      studentNum = as.integer(studentInfo$studentNum),
+      stringsAsFactors = FALSE
+    )
+    tmpl_students(new_students)
+  }
+
+  updateGroupInfoFromUploadedData <- function (groupInfo, startTimeLabels) {
+    for (i in seq_len(nrow(groupInfo))) {
+      # Find the index of the matching start time label
+      timeOfDay_idx <- which(startTimeLabels == groupInfo$timeOfDay[i])
+      updateTextInput(session, paste0("tmpl_group_", i, "_groupNum"), value = groupInfo$groupNum[i])
+      updateDateInput(session, paste0("tmpl_group_", i, "_date"), value = groupInfo$date[i])
+      if (length(timeOfDay_idx) == 1) {
+        updateSelectInput(session, paste0("tmpl_group_", i, "_timeOfDay"), selected = as.character(timeOfDay_idx))
+      }
+    }
+  }
+
+  updateStudentColorsFromUploadedData <- function(fillColor) {
+    for (i in seq_len(nrow(fillColor))) {
+      colourpicker::updateColourInput(session, paste0("tmpl_student_color_", i), value = fillColor$code[i])
+    }
+  }
+
+  updateTimeInfoFromUploadedData <- function(timeBlockInfo) {
+    req(timeBlockInfo)
+    num_starttimes <- nrow(timeBlockInfo)
+    num_timeblocks <- length(grep("^Block[0-9]+_Start$", names(timeBlockInfo)))
+    # Update number of start times and time blocks
+    updateNumericInput(session, "tmpl_num_starttimes", value = num_starttimes)
+    updateNumericInput(session, "tmpl_num_timeblocks", value = num_timeblocks)
+
+    for (i in seq_len(num_starttimes)) {
+      # Update start time label
+      updateTextInput(session, paste0("tmpl_starttime_name_", i), value = timeBlockInfo$startTimeLabel[i])
+      # Update arrival and end times (convert Excel fraction to POSIXct)
+      arrival_val <- timeBlockInfo$arrivalTime[i]
+      end_val <- timeBlockInfo$leaveTime[i]
+      if (!is.na(arrival_val)) {
+        arrival_time <- strptime(sprintf("%02d:%02d", floor(arrival_val * 24), round((arrival_val * 24 - floor(arrival_val * 24)) * 60)), "%H:%M")
+        updateTimeInput(session, paste0("tmpl_arrival_", i), value = arrival_time)
+      }
+      if (!is.na(end_val)) {
+        end_time <- strptime(sprintf("%02d:%02d", floor(end_val * 24), round((end_val * 24 - floor(end_val * 24)) * 60)), "%H:%M")
+        updateTimeInput(session, paste0("tmpl_end_", i), value = end_time)
+      }
+      # Update each time block's start and end
+      for (tb in seq_len(num_timeblocks)) {
+        start_col <- paste0("Block", tb, "_Start")
+        end_col <- paste0("Block", tb, "_End")
+        if (start_col %in% names(timeBlockInfo)) {
+          val <- timeBlockInfo[[start_col]][i]
+          if (!is.na(val)) {
+            t <- strptime(sprintf("%02d:%02d", floor(val * 24), round((val * 24 - floor(val * 24)) * 60)), "%H:%M")
+            updateTimeInput(session, paste0("tmpl_timeblock_", i, "_", tb, "_start"), value = t)
+          }
+        }
+        if (end_col %in% names(timeBlockInfo)) {
+          val <- timeBlockInfo[[end_col]][i]
+          if (!is.na(val)) {
+            t <- strptime(sprintf("%02d:%02d", floor(val * 24), round((val * 24 - floor(val * 24)) * 60)), "%H:%M")
+            updateTimeInput(session, paste0("tmpl_timeblock_", i, "_", tb, "_end"), value = t)
+          }
+        }
+      }
+    }
+  }
+
+  updateStationInfoFromUploadedData <- function(stationInfo) {
+    req(stationInfo)
+    n <- nrow(stationInfo)
+    for (i in seq_len(n)) {
+      prefix <- paste0("tmpl_station_", i, "_")
+      updateTextInput(session, paste0(prefix, "shortKey"), value = stationInfo$shortKey[i])
+      updateTextInput(session, paste0(prefix, "niceName"), value = stationInfo$niceName[i])
+      updateNumericInput(session, paste0(prefix, "timeInMin"), value = stationInfo$timeInMin[i])
+      updateTextInput(session, paste0(prefix, "room1"), value = stationInfo$room1[i])
+      updateTextInput(session, paste0(prefix, "room2"), value = stationInfo$room2[i])
+      updateTextInput(session, paste0(prefix, "notes"), value = stationInfo$notes[i])
+      colourpicker::updateColourInput(session, paste0(prefix, "stationColor"), value = stationInfo$stationColor[i])
+    }
+  }
+
+  updateStationAssignmentsFromUploadedData <- function(schedule) {
+    req(schedule)
+    # Identify time block columns
+    timeblock_cols <- grep("^TimeBlock", names(schedule), value = TRUE)
+    n_stations <- nrow(schedule)
+    n_blocks <- length(timeblock_cols)
+    for (i in seq_len(n_stations)) {
+      for (j in seq_len(n_blocks)) {
+        inputId <- paste0("sched_", i, "_", j)
+        val <- schedule[[timeblock_cols[j]]][i]
+        updateSelectInput(session, inputId, selected = if (!is.null(val)) as.character(val) else "")
+      }
+    }
+  }
+
+  updateFacultyInfoFromUploadedData <- function(facultyInfo) {
+    req(facultyInfo)
+    # By student: columns groupNum, studentNum, faculty
+    if (all(c("groupNum", "studentNum", "faculty") %in% names(facultyInfo))) {
+      for (i in seq_len(nrow(facultyInfo))) {
+        g <- as.character(facultyInfo$groupNum[i])
+        s <- as.integer(facultyInfo$studentNum[i])
+        val <- facultyInfo$faculty[i]
+        inputId <- paste0("faculty_student_", g, "_", s)
+        updateTextInput(session, inputId, value = val)
+      }
+    # By room: columns shortKey, group1, group2, ...
+    } else if ("shortKey" %in% names(facultyInfo) && any(grepl("^group[0-9]+$", names(facultyInfo)))) {
+      group_cols <- grep("^group[0-9]+$", names(facultyInfo), value = TRUE)
+      for (row in seq_len(nrow(facultyInfo))) {
+        for (group_col in group_cols) {
+          g <- sub("^group", "", group_col)
+          val <- facultyInfo[[group_col]][row]
+          inputId <- paste0("faculty_room_", g, "_", row)
+          updateTextInput(session, inputId, value = val)
+        }
+      }
+    }
+  }
+
+  ########################
+  ## Render tables and UI elements
+  ########################
 
   output$studentInfo <- renderTable(
     {
@@ -1282,6 +1734,10 @@ server <- function(input, output, session) {
         "))
       )
   })
+
+  ########################
+  ## Generate schedules
+  ########################
 
   # Automatically generate schedules when all required data is loaded
   observe({
@@ -1590,7 +2046,11 @@ server <- function(input, output, session) {
     )
   })
 
-  # ---- Download Handlers ----
+
+  ########################
+  ## Download handlers
+  ########################
+
   output$download <- downloadHandler(
     filename = function() {
       "Generated_Schedules.xlsx"
@@ -1849,145 +2309,11 @@ server <- function(input, output, session) {
     }
   )
 
-  # Store faculty assignment info
-  
-  # --- Faculty Assignment UI ---
-  output$faculty_assignment_ui <- renderUI({
-    req(input$tmpl_num_groups, input$tmpl_num_stations, input$tmpl_max_students)
-    num_groups <- input$tmpl_num_groups
-    num_stations <- input$tmpl_num_stations
-    max_students <- input$tmpl_max_students
+  ########################
+  ## Template Creator Logic
+  ########################
 
-    num_starttimes <- input$tmpl_num_starttimes
-
-    # Get start time names from tmpl_inputs
-    start_time_names <- sapply(seq_len(num_starttimes), function(i) {
-      key <- paste0("tmpl_starttime_name_", i)
-      nm <- tmpl_inputs$starttime_names[[key]]
-      if (is.null(nm) || nm == "") paste0("Start", i) else nm
-    })
-
-    update_tmpl_group_info()
-    group_panels <- lapply(seq_len(num_groups), function(g) {
-      group_label <- paste("Group", g)
-      group_date <- input[[paste0("tmpl_group_", g, "_date")]]
-      group_timeOfDay <- input[[paste0("tmpl_group_", g, "_timeOfDay")]]
-      time_label <- get_start_time_label(group_timeOfDay, start_time_names)
-
-      group_heading <- tags$h4(
-        group_label,
-        if (!is.null(group_date) && !is.na(group_date)) {
-          paste0(" (", format(as.Date(group_date), "%A, %B %d, %Y"),
-                if (!is.null(time_label) && !is.na(time_label)) paste0(", ", time_label) else "",
-                ")")
-        }
-      )
-  
-      if (input$faculty_assign_mode == "room") {
-        # By room: Table for this group, stations as rows
-        station_names <- sapply(seq_len(num_stations), function(i) {
-          val <- input[[paste0("tmpl_station_", i, "_niceName")]]
-          if (is.null(val) || val == "") paste0("Station ", i) else val
-        })
-        rows <- lapply(seq_len(num_stations), function(i) {
-          inputId <- paste0("faculty_room_", g, "_", i)
-          val <- NULL
-          if (!is.null(faculty_assignments$by_room[[as.character(g)]])) {
-            val <- faculty_assignments$by_room[[as.character(g)]][[as.character(i)]]
-          }
-          if (is.null(val)) val <- ""
-          tags$tr(
-            tags$td(station_names[i]),
-            tags$td(textInput(inputId, NULL, value = val, width = "100%"))
-          )
-        })
-        table_ui <- tags$table(
-          style = "width:100%; margin-bottom: 16px;",
-          tags$thead(
-            tags$tr(
-              tags$th("Station"),
-              tags$th("Faculty")
-            )
-          ),
-          tags$tbody(rows)
-        )
-      } else {
-        # By student: Table for this group, student numbers as rows
-        rows <- lapply(seq_len(max_students), function(s) {
-          inputId <- paste0("faculty_student_", g, "_", s)
-          val <- NULL
-          if (!is.null(faculty_assignments$by_student[[as.character(g)]])) {
-            val <- faculty_assignments$by_student[[as.character(g)]][[as.character(s)]]
-          }
-          if (is.null(val)) val <- ""
-          tags$tr(
-            tags$td(s),
-            tags$td(textInput(inputId, NULL, value = val, width = "100%"))
-          )
-        })
-        table_ui <- tags$table(
-          style = "width:100%; margin-bottom: 16px;",
-          tags$thead(
-            tags$tr(
-              tags$th("Student #"),
-              tags$th("Faculty")
-            )
-          ),
-          tags$tbody(rows)
-        )
-      }
-      tags$div(
-        style = "margin-bottom: 32px; border: 1px solid #ccc; border-radius: 6px; padding: 12px;",
-        group_heading,
-        table_ui
-      )
-    })
-  
-    tagList(group_panels)
-  })
-
-  # --- Faculty Assignment State ---
-  faculty_assignments <- reactiveValues(
-    by_room = list(),   # by_room[[group]][[station]] = faculty name
-    by_student = list() # by_student[[group]][[studentNum]] = faculty name
-  )
-  
-  # --- Faculty Assignment Update Function ---
-  update_faculty_assignments <- function() {
-    isolate({
-      req(input$tmpl_num_groups, input$tmpl_num_stations, input$tmpl_max_students)
-      if (input$faculty_assign_mode == "room") {
-        for (g in seq_len(input$tmpl_num_groups)) {
-          for (i in seq_len(input$tmpl_num_stations)) {
-            inputId <- paste0("faculty_room_", g, "_", i)
-            val <- input[[inputId]]
-            if (!is.null(val)) {
-              if (is.null(faculty_assignments$by_room[[as.character(g)]])) faculty_assignments$by_room[[as.character(g)]] <- list()
-              faculty_assignments$by_room[[as.character(g)]][[as.character(i)]] <- val
-            }
-          }
-        }
-      } else {
-        for (g in seq_len(input$tmpl_num_groups)) {
-          for (s in seq_len(input$tmpl_max_students)) {
-            inputId <- paste0("faculty_student_", g, "_", s)
-            val <- input[[inputId]]
-            if (!is.null(val)) {
-              if (is.null(faculty_assignments$by_student[[as.character(g)]])) faculty_assignments$by_student[[as.character(g)]] <- list()
-              faculty_assignments$by_student[[as.character(g)]][[as.character(s)]] <- val
-            }
-          }
-        }
-      }
-    })
-  }
-  
-  # --- Faculty Assignment Observers ---
-  observe({
-    update_faculty_assignments()
-  })
-
-  # --- TEMPLATE CREATOR LOGIC ---
+  # --- Store template data as a reactive value ---
   template_data <- reactive({
     req(
       input$tmpl_num_groups,
@@ -2061,7 +2387,7 @@ server <- function(input, output, session) {
       studentNum = seq_len(max_students),
       code = sapply(seq_len(max_students), function(i) {
         key <- paste0("tmpl_student_color_", i)
-        val <- isolate(input[[key]])
+        val <- tmpl_fillColor$colors[[key]]
         if (is.null(val) || val == "") "#FFFFFF" else val
       }),
       stringsAsFactors = FALSE
@@ -2214,9 +2540,11 @@ server <- function(input, output, session) {
     update_tmpl_group_info()
     update_tmpl_station_info()
     update_faculty_assignments()
+    update_tmpl_fillColor()
     tmpl <- template_data()
     data$studentInfo <- tmpl$studentInfo
     data$groupInfo <- tmpl$groupInfo
+    print(tmpl$fillColor)
     data$fillColor <- tmpl$fillColor
     data$timeBlockInfo <- tmpl$timeBlockInfo
     data$schedule <- tmpl$schedule
@@ -2229,10 +2557,11 @@ server <- function(input, output, session) {
   outputOptions(output, "tmpl_group_info_ui", suspendWhenHidden = FALSE)
   outputOptions(output, "tmpl_student_colors_ui", suspendWhenHidden = FALSE)
   outputOptions(output, "tmpl_student_overflow_warning", suspendWhenHidden = FALSE)
+  outputOptions(output, "tmpl_student_warning_ui", suspendWhenHidden = FALSE)
   outputOptions(output, "tmpl_student_table", suspendWhenHidden = FALSE)
   outputOptions(output, "tmpl_station_info_ui", suspendWhenHidden = FALSE)
   outputOptions(output, "tmpl_schedule_ui", suspendWhenHidden = FALSE)
-  # outputOptions(output, "faculty_assignment_ui", suspendWhenHidden = FALSE) # gives error when called
+  outputOptions(output, "faculty_assignment_ui", suspendWhenHidden = FALSE)
 }
 
 shinyApp(ui, server)
