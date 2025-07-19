@@ -209,7 +209,36 @@ ui <- fluidPage(
       h3("Option (b)"),
       p("Upload an existing Excel template and then edit within the Enter Info and Station Assignments tab as desired"),
       fileInput("file", "Upload Template", accept = ".xlsx", width = "100%"),
-      actionButton("load_uploaded_ui", "Load Uploaded Data Into UI", icon = icon("upload"), class = "btn-info", width = "100%"),
+      # Hide this button from user display, but keep it present for programmatic use
+      actionButton(
+          "update_station_info_btn",
+          "4. Update Station Info",
+          width = "100%"
+        ),
+      tags$div(
+        style = "display:none;",
+        p(
+          "Note: In order to add the uploaded information to the \"Enter Info\" tab, you must click this sequence of buttons",
+          style = "color: red;"
+        ),
+        actionButton(
+          "update_start_times_btn",
+          "1. Update Start Times",
+          width = "100%"
+        ),
+        actionButton(
+          "update_group_info_btn",
+          "2. Update Group Info",
+          width = "100%"
+        ),
+        actionButton(
+          "update_student_info_btn",
+          "3. Update Student Info",
+          width = "100%"
+        ),
+        
+        actionButton("load_uploaded_ui", "Load Uploaded Data Into UI", icon = icon("upload"), class = "btn-info", width = "100%")
+      ),
       h2("Step 2:"),
       p("Click the button below to load the entered information and generate schedules"),
       p(
@@ -389,15 +418,6 @@ ui <- fluidPage(
 
 # Server
 server <- function(input, output, session) {
-
-  observeEvent(input$test_delay, {
-    print("Button clicked, starting delay...")
-    delay(2000, {
-      print("Delay finished! This proves delay() works.")
-      showNotification("Delay finished! Check R console for print.", type = "message")
-    })
-  })
-
   output$raw_schedule_table <- renderTable({
     req(data$schedule)
     data$schedule
@@ -418,6 +438,9 @@ server <- function(input, output, session) {
 
   # --- Group Info ---
   tmpl_group_info <- reactiveValues(groups = list())
+
+  # --- Fill Color ---
+  tmpl_fillColor <- reactiveValues(colors = list())
 
   # ---  Student info ---------
   tmpl_students <- reactiveVal(NULL)
@@ -446,6 +469,9 @@ server <- function(input, output, session) {
 
   # --- Group Info ---
   tmpl_group_info_upload <- reactiveValues(groups = list())
+
+  # --- Fill Color ---
+  tmpl_fillColor_upload <- reactiveValues(colors = list())
 
   # ---  Student info ---------
   tmpl_students_upload <- reactiveVal(NULL)
@@ -532,7 +558,6 @@ server <- function(input, output, session) {
   update_tmpl_group_info <- function() {
     req(input$tmpl_num_groups, input$tmpl_num_starttimes)
     n <- input$tmpl_num_groups
-    print("Updating group info from UI inputs")
     isolate({
       for (i in seq_len(n)) {
         prefix <- paste0("tmpl_group_", i, "_")
@@ -560,6 +585,26 @@ server <- function(input, output, session) {
     req(input$tmpl_num_groups, input$tmpl_num_starttimes)
     n <- input$tmpl_num_groups
     update_tmpl_group_info()
+  })
+
+  # --- Observe and update fill colors ---
+  update_tmpl_fillColor <- function() {
+    req(input$tmpl_max_students)
+    n <- input$tmpl_max_students
+    isolate({
+      for (i in seq_len(n)) {
+        key <- paste0("tmpl_student_color_", i)
+        val <- input[[key]]
+        if (!is.null(val)) tmpl_fillColor$colors[[key]] <- val
+      }
+      # Remove any extra if n decreased
+      to_remove <- setdiff(names(tmpl_fillColor$colors), paste0("tmpl_student_color_", seq_len(n)))
+      tmpl_fillColor$colors[to_remove] <- NULL
+    })
+  }
+  
+  observe({
+    update_tmpl_fillColor()
   })
 
   # --- Observe and update station info ---
@@ -643,8 +688,6 @@ server <- function(input, output, session) {
       starttime_names <- if (use_upload) tmpl_inputs_upload$starttime_names else tmpl_inputs$starttime_names
       arrival_times <- if (use_upload) tmpl_inputs_upload$arrival_times else tmpl_inputs$arrival_times
       end_times <- if (use_upload) tmpl_inputs_upload$end_times else tmpl_inputs$end_times
-      print(paste("tmpl_starttime_names_ui rendered at", Sys.time()))
-      print(str(starttime_names))
       fluidRow(
         column(12, helpText("Enter times as hh:mm (24-hour format, e.g. 07:30 and 17:15)")),
         lapply(seq_len(n), function(i) {
@@ -766,9 +809,18 @@ server <- function(input, output, session) {
   output$tmpl_group_info_ui <- renderUI({
     req(input$tmpl_num_groups, input$tmpl_num_starttimes)
     n <- input$tmpl_num_groups
+
+    # Use uploaded values if updatingUIfromUploadedData() is TRUE and upload values exist
+    use_upload <- updatingUIfromUploadedData() && !is.null(tmpl_group_info_upload$groups) && length(tmpl_group_info_upload$groups) > 0
+
+    # Use uploaded or current start time names
     start_time_names <- sapply(seq_len(input$tmpl_num_starttimes), function(i) {
       key <- paste0("tmpl_starttime_name_", i)
-      nm <- tmpl_inputs$starttime_names[[key]]
+      if (use_upload) {
+        nm <- tmpl_inputs_upload$starttime_names[[key]]
+      } else {
+        nm <- tmpl_inputs$starttime_names[[key]]
+      }
       if (is.null(nm) || nm == "") paste0("Start", i) else nm
     })
     # Create named vector: values = index, names = label
@@ -777,7 +829,11 @@ server <- function(input, output, session) {
       tagList(
         lapply(seq_len(n), function(i) {
           prefix <- paste0("tmpl_group_", i, "_")
-          group <- tmpl_group_info$groups[[i]]
+          if (use_upload) {
+            group <- tmpl_group_info_upload$groups[[i]]
+          } else {
+            group <- tmpl_group_info$groups[[i]]
+          }
           groupNum_val <- if (!is.null(group) && !is.null(group$groupNum)) group$groupNum else paste0("Group ", i)
           date_val <- if (!is.null(group) && !is.null(group$date)) group$date else NULL
           startTime_val <- if (!is.null(group) && !is.null(group$startTime)) group$startTime else ""
@@ -788,10 +844,6 @@ server <- function(input, output, session) {
           } else {
             as.character(i)
           }
-          # print(
-          #   str(timeOfDay_val),
-          #   str(get_start_time_label(timeOfDay_val, start_time_names))
-          # )
           fluidRow(
             column(4, textInput(paste0(prefix, "groupNum"), paste0("Group ", i, " Name"), value = groupNum_val)),
             column(4, dateInput(paste0(prefix, "date"), "Date", value = if (!is.null(date_val)) date_val else NULL)),
@@ -806,6 +858,10 @@ server <- function(input, output, session) {
   output$tmpl_student_colors_ui <- renderUI({
     req(input$tmpl_max_students)
     n <- input$tmpl_max_students
+  
+    # Use uploaded values if updatingUIfromUploadedData() is TRUE and upload values exist
+    use_upload <- updatingUIfromUploadedData() && !is.null(tmpl_fillColor_upload$colors) && length(tmpl_fillColor_upload$colors) > 0
+  
     # Default colors (repeat if needed)
     default_colors <- c(
       "#FF7C80", "#FFA365", "#FFFF00", "#AEFF5D", "#A6A200", "#97CBFF",
@@ -813,6 +869,7 @@ server <- function(input, output, session) {
       "#85FFDF", "#25C6FF", "#6B9572", "#FF8FDA", "#93AA00", "#593315",
       "#F13A13", "#232C16"
     )
+  
     tagList(
       fluidRow(
         column(12, h4("Student Colors (for fillColor sheet)"))
@@ -820,8 +877,15 @@ server <- function(input, output, session) {
       fluidRow(
         lapply(seq_len(n), function(i) {
           key <- paste0("tmpl_student_color_", i)
-          val <- isolate(input[[key]])
-          default_val <- if (!is.null(val)) val else default_colors[(i - 1) %% length(default_colors) + 1]
+          # Priority: uploaded fillColor > current fillColor > input > default
+          if (use_upload && !is.null(tmpl_fillColor_upload$colors[[key]])) {
+            val <- tmpl_fillColor_upload$colors[[key]]
+          } else if (!use_upload && !is.null(tmpl_fillColor$colors[[key]])) {
+            val <- tmpl_fillColor$colors[[key]]
+          } else {
+            val <- isolate(input[[key]])
+          }
+          default_val <- if (!is.null(val) && val != "") val else default_colors[(i - 1) %% length(default_colors) + 1]
           column(
             4,
             tags$div(
@@ -1342,36 +1406,90 @@ server <- function(input, output, session) {
   observeEvent(input$file, {
     req(input$file)
     tables <- load_data(input$file$datapath)
+    data$studentInfo <- tables$studentInfo
+    data$groupInfo <- tables$groupInfo
+    data$fillColor <- tables$fillColor
+    data$timeBlockInfo <- tables$timeBlockInfo
+    data$schedule <- tables$schedule
+    data$faculty <- tables$faculty
+
     uploadedTables$tables <- tables
 
-    updateRadioButtons(session, "use_uploaded_values", selected = "upload")
-    updatingUIfromUploadedData(TRUE)
+    updateUInumbersFromUploadedData()
 
-    # Update template info from uploaded data
-    updateTemplateInfoFromUploadedData(tables)
-  
-    # Update numeric inputs to match uploaded data
+    # delay(
+    #   1000,
+    #   shinyjs::click("load_uploaded_ui")
+    # )
+
+    delay(
+      1000,
+      {
+        updateTimeInfoFromUploadedData(tables$timeBlockInfo)
+        delay(
+          100,
+          {
+            updateGroupInfoFromUploadedData(tables$groupInfo, tables$timeBlockInfo$startTimeLabel)
+            updateStudentColorsFromUploadedData(tables$fillColor)
+            delay(
+              100,
+              {
+                updateStudentTableFromUploadedData(tables$studentInfo)
+                delay(
+                  100,
+                  {
+                    updateStationInfoFromUploadedData(tables$schedule)
+                  }
+                )
+              }
+            )
+          }
+        )
+      }
+    )
+  })
+
+  updateUInumbersFromUploadedData <- function() {
+    req(uploadedTables$tables)
+    tables <- uploadedTables$tables
+
+    # Update numeric inputs based on uploaded data
     updateNumericInput(session, "tmpl_num_starttimes", value = nrow(tables$timeBlockInfo))
     updateNumericInput(session, "tmpl_num_timeblocks", value = length(grep("^Block[0-9]+_Start$", names(tables$timeBlockInfo))))
     updateNumericInput(session, "tmpl_num_groups", value = nrow(tables$groupInfo))
     updateNumericInput(session, "tmpl_max_students", value = max(as.integer(tables$studentInfo$studentNum), na.rm = TRUE))
     updateNumericInput(session, "tmpl_total_students", value = nrow(tables$studentInfo))
     updateNumericInput(session, "tmpl_num_stations", value = nrow(tables$schedule))
+  }
 
-    if (all(c("groupNum", "studentNum", "faculty") %in% names(tables$faculty))) {
-      updateRadioButtons(session, "faculty_assign_mode", selected = "student")
-    } else if (any(grepl("^group[0-9]+$", names(tables$faculty)))) {
-      updateRadioButtons(session, "faculty_assign_mode", selected = "room")
-    }
-  
-    # Optionally, show a notification
-    showNotification("Template uploaded. Please click 'Load Uploaded Data' to finish loading.", type = "message")
+  observeEvent(input$update_numbers_btn, {
+    updateUInumbersFromUploadedData()
+  })
 
+  observeEvent(input$update_start_times_btn, {
+    req(uploadedTables$tables)
+    tables <- uploadedTables$tables
+    updateTimeInfoFromUploadedData(tables$timeBlockInfo)
+  })
 
-    delay(1000, {
-      updateRadioButtons(session, "use_uploaded_values", selected = "edit")
-      updatingUIfromUploadedData(FALSE)
-    })
+  observeEvent(input$update_group_info_btn, {
+    req(uploadedTables$tables)
+    tables <- uploadedTables$tables
+    updateGroupInfoFromUploadedData(tables$groupInfo, tables$timeBlockInfo$startTimeLabel)
+    updateStudentColorsFromUploadedData(tables$fillColor)
+  })
+
+  observeEvent(input$update_student_info_btn, {
+    req(uploadedTables$tables)
+    tables <- uploadedTables$tables
+    updateStudentTableFromUploadedData(tables$studentInfo)
+  })
+
+  observeEvent(input$update_station_info_btn, {
+    req(uploadedTables$tables)
+    tables <- uploadedTables$tables
+
+    updateStationInfoFromUploadedData(tables$schedule)
   })
 
   updateTemplateInfoFromUploadedData <- function (tables){
@@ -1397,6 +1515,8 @@ server <- function(input, output, session) {
       }
     }
 
+    tmpl_inputs <- tmpl_inputs_upload
+
     groupInfo <- tables$groupInfo
     startTimeLabels <- tables$timeBlockInfo$startTimeLabel
     for (i in seq_len(nrow(groupInfo))) {
@@ -1410,6 +1530,8 @@ server <- function(input, output, session) {
         timeOfDay = timeOfDay_idx
       )
     }
+
+    tmpl_group_info <- tmpl_group_info_upload
 
   }
 
@@ -1454,7 +1576,7 @@ server <- function(input, output, session) {
 
   updateStudentColorsFromUploadedData <- function(fillColor) {
     for (i in seq_len(nrow(fillColor))) {
-      updateColourInput(session, paste0("tmpl_student_color_", i), value = fillColor$code[i])
+      colourpicker::updateColourInput(session, paste0("tmpl_student_color_", i), value = fillColor$code[i])
     }
   }
 
@@ -1488,7 +1610,6 @@ server <- function(input, output, session) {
           val <- timeBlockInfo[[start_col]][i]
           if (!is.na(val)) {
             t <- strptime(sprintf("%02d:%02d", floor(val * 24), round((val * 24 - floor(val * 24)) * 60)), "%H:%M")
-            print(paste0("Updating time block ", i, " ", tb, " start to ", t))
             updateTimeInput(session, paste0("tmpl_timeblock_", i, "_", tb, "_start"), value = t)
           }
         }
@@ -1503,25 +1624,65 @@ server <- function(input, output, session) {
     }
   }
 
+  updateStationInfoFromUploadedData <- function(stationInfo) {
+    req(stationInfo)
+    n <- nrow(stationInfo)
+    for (i in seq_len(n)) {
+      prefix <- paste0("tmpl_station_", i, "_")
+      updateTextInput(session, paste0(prefix, "shortKey"), value = stationInfo$shortKey[i])
+      updateTextInput(session, paste0(prefix, "niceName"), value = stationInfo$niceName[i])
+      updateNumericInput(session, paste0(prefix, "timeInMin"), value = stationInfo$timeInMin[i])
+      updateTextInput(session, paste0(prefix, "room1"), value = stationInfo$room1[i])
+      updateTextInput(session, paste0(prefix, "room2"), value = stationInfo$room2[i])
+      updateTextInput(session, paste0(prefix, "notes"), value = stationInfo$notes[i])
+      colourpicker::updateColourInput(session, paste0(prefix, "stationColor"), value = stationInfo$stationColor[i])
+    }
+  }
+
   observeEvent(input$load_uploaded_ui, {
     tables <- uploadedTables$tables
     req(tables)
 
-    # --- Update time info UI ---
-    updateTimeInfoFromUploadedData(tables$timeBlockInfo)
-  
-    # --- Update group info UI ---
-    updateGroupInfoFromUploadedData(tables$groupInfo, tables$timeBlockInfo$startTimeLabel)
+    # shinyjs::click("update_start_times_btn")
+    # delay(
+    #   100,
+    #   {
+    #     shinyjs::click("update_group_info_btn")
+    #     delay(
+    #       100,
+    #       {
+    #         shinyjs::click("update_student_info_btn")
+    #         delay(
+    #           100,
+    #           {
+    #             shinyjs::click("update_station_info_btn")
+    #           }
+    #         )
+    #       }
+    #     )
+    #   }
+    # )
 
-    # --- Update student table ---
-    updateStudentTableFromUploadedData(tables$studentInfo)
-  
-    # --- Update student colors ---
-    updateStudentColorsFromUploadedData(tables$fillColor)
-  
-    
-  
-    showNotification("Uploaded data loaded into UI. You may now generate schedules.", type = "message")
+    updateTimeInfoFromUploadedData(tables$timeBlockInfo)
+    delay(
+      100,
+      {
+        updateGroupInfoFromUploadedData(tables$groupInfo, tables$timeBlockInfo$startTimeLabel)
+        updateStudentColorsFromUploadedData(tables$fillColor)
+        delay(
+          100,
+          {
+            updateStudentTableFromUploadedData(tables$studentInfo)
+            delay(
+              100,
+              {
+                updateStationInfoFromUploadedData(tables$schedule)
+              }
+            )
+          }
+        )
+      }
+    )
   })
 
 
