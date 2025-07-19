@@ -7,6 +7,7 @@ library(zip)
 library(colourpicker)
 library(shinyTime)
 library(shinyjs)
+library(lubridate)
 # Helper to load all sheets
 load_data <- function(file) {
   list(
