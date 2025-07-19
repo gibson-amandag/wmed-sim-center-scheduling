@@ -23,6 +23,20 @@ fraction_to_posix <- function(frac) {
 
 # Helper to load all sheets
 load_data <- function(file) {
+  required_sheets <- c("studentInfo", "groupInfo", "fillColor", "timeBlockInfo", "schedule", "faculty")
+  sheets <- openxlsx::getSheetNames(file)
+  missing <- setdiff(required_sheets, sheets)
+  if (length(missing) > 0) {
+    showNotification(
+      paste0(
+        "The following required sheets are missing from the uploaded file: ",
+        paste(missing, collapse = ", ")
+      ),
+      type = "error",
+      duration = 10
+    )
+    return(NULL)
+  }
   list(
     studentInfo   = read.xlsx(file, sheet = "studentInfo", detectDates = TRUE),
     groupInfo     = read.xlsx(file, sheet = "groupInfo", detectDates = TRUE),
