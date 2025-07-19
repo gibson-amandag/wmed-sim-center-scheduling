@@ -2137,119 +2137,112 @@ server <- function(input, output, session) {
   # Show selected student's schedule (nice display)
   output$station_schedule_table <- renderUI({
     req(data$schedules, input$station_select, input$station_group_select)
-
-    # Parse groupNum and stationNum from selection
+  
     stationKey <- as.character(input$station_select)
     niceName <- data$schedule$niceName[data$schedule$shortKey == stationKey]
     groupNum <- as.character(input$station_group_select)
-
-    # Find the group schedule
     group_name <- paste0("Group_", groupNum)
-    if (!group_name %in% names(data$schedules)) {
-      return(NULL)
-    }
-
+    if (!group_name %in% names(data$schedules)) return(NULL)
     sched <- data$schedules[[group_name]]
-
     group_date <- sched$date
     group_start <- sched$startTime
     group_end <- sched$endTime
+  
+    # Get station info from wide
+    station_wide <- sched$wide %>% filter(shortKey == !!stationKey)
+    if (nrow(station_wide) == 0) return(tags$div("No schedule found for this station"))
+    room1 <- station_wide$room1
+    room2 <- station_wide$room2
+    notes <- station_wide$notes
+    duration <- station_wide$timeInMin
 
-    station_sched <- sched$wide %>%
-      filter(shortKey == !!stationKey)
-
-    if (nrow(station_sched) == 0) {
-      return(tags$div("No schedule found for this station"))
-    }
-
-    # Extract room1, room2, and notes from the schedule
-    room1 <- station_sched$room1
-    room2 <- station_sched$room2
-    notes <- station_sched$notes
-
-    # Check the faculty assignment mode from the structure 
     faculty_by_student <- sched$faculty_by_student
-
-    roomFaculty <- NULL
-    if(!faculty_by_student){
-      roomFaculty <- station_sched$faculty
-    }
-
+    roomFaculty <- if (!faculty_by_student) station_wide$faculty else NULL
     timeblock_times <- sched$timeblock_times
-
-    # Get all time blocks for this group
-    long_sched <- sched$long
-    station_sched <- long_sched %>%
-      filter(
-        shortKey == !!stationKey,
-        groupNum == !!groupNum
-      ) %>%
+  
+    # Get all time blocks for this group/station
+    long_sched <- sched$long %>%
+      filter(shortKey == !!stationKey, groupNum == !!groupNum) %>%
       arrange(timeBlock)
-
-    # If no schedule, return
-    if (nrow(station_sched) == 0) {
-      return(tags$div("No schedule found for this station"))
-    }
-
-    # Build table rows: one per time block, show time instead of "TimeBlockX"
-    rows <- lapply(seq_len(nrow(station_sched)), function(i) {
-      row <- station_sched[i, ]
-      # Get the time for this time block
-      tb_time <- if (!is.null(timeblock_times[[row$timeBlock]])) timeblock_times[[row$timeBlock]] else row$timeBlock
-      # Compose station info (like template schedule)
-      station_info <- tags$div(
-        if (!is.null(row$studentLabel) && !is.na(row$studentLabel) && row$studentLabel != "") {
-          paste0("Student: ", row$studentLabel)
-        },
-        if (faculty_by_student && !is.null(row$faculty) && !is.na(row$faculty) && row$faculty != "") {
-          list(tags$br(), paste0("Faculty: ", row$faculty))
+    if (nrow(long_sched) == 0) return(tags$div("No schedule found for this station"))
+  
+    # Prepare merged rows
+    n <- nrow(long_sched)
+    rows <- list()
+    i <- 1
+    while (i <= n) {
+      row <- long_sched[i, ]
+      # Find how many subsequent rows have the same studentLabel
+      rowspan <- 1
+      while (
+        i + rowspan <= n &&
+        !is.na(long_sched$studentLabel[i]) &&
+        !is.na(long_sched$studentLabel[i + rowspan]) &&
+        long_sched$studentLabel[i] == long_sched$studentLabel[i + rowspan]
+      ) {
+        rowspan <- rowspan + 1
+      }
+      # Build rows for this group
+      for (j in 0:(rowspan - 1)) {
+        idx <- i + j
+        this_row <- long_sched[idx, ]
+        tb_time <- if (!is.null(timeblock_times[[this_row$timeBlock]])) timeblock_times[[this_row$timeBlock]] else this_row$timeBlock
+        # Only add the merged cell for the first row in the group
+        if (j == 0) {
+          station_info <- tags$div(
+            if (!is.null(this_row$studentLabel) && !is.na(this_row$studentLabel) && this_row$studentLabel != "") {
+              paste0("Student: ", this_row$studentLabel)
+            } else {
+              "Break"
+            },
+            if (faculty_by_student && !is.null(this_row$faculty) && !is.na(this_row$faculty) && this_row$faculty != "") {
+              list(tags$br(), paste0("Faculty: ", this_row$faculty))
+            }
+          )
+          studentNum <- if (!is.null(this_row$studentNum) && !is.na(this_row$studentNum)) this_row$studentNum else NA
+          student_color <- NULL
+          if (!is.na(studentNum) && studentNum %in% data$fillColor$studentNum) {
+            student_color <- data$fillColor$code[data$fillColor$studentNum == studentNum]
+          }
+          station_style <- if (!is.null(student_color) && student_color != "") {
+            paste0("background-color:", student_color, ";")
+          } else {
+            ""
+          }
+          rows[[length(rows) + 1]] <- tags$tr(
+            tags$td(tb_time),
+            tags$td(station_info, style = station_style, rowspan = rowspan)
+          )
+        } else {
+          # For subsequent rows, just add the time cell and skip the merged cell
+          rows[[length(rows) + 1]] <- tags$tr(
+            tags$td(tb_time)
+          )
         }
-      )
-      # Use student color if present, else stationColor
-      studentNum <- if (!is.null(row$studentNum) && !is.na(row$studentNum)) row$studentNum else NA
-      student_color <- NULL
-      if (!is.na(studentNum) && studentNum %in% data$fillColor$studentNum) {
-        student_color <- data$fillColor$code[data$fillColor$studentNum == studentNum]
       }
-      station_style <- if (!is.null(student_color) && student_color != "") {
-        paste0("background-color:", student_color, ";")
-      } else {
-        ""
-      }
-      tags$tr(
-        tags$td(tb_time),
-        tags$td(station_info, style = station_style)
-      )
-    })
-
-    # Table header
+      i <- i + rowspan
+    }
+  
     header <- tags$tr(
       tags$th("Time"),
       tags$th("Student Info")
     )
-
+  
     tagList(
       tags$div(
         tags$h4(niceName),
         tags$p(tags$b("Group #:"), groupNum),
-        if (!is.null(room1) && !is.na(room1) && room1 != "") {
-          tags$p(tags$b("Room:"), room1)
-        },
-        if (!is.null(room2) && !is.na(room2) && room2 != "") {
-          tags$p(tags$b("Additional Room:"), room2)
-        },
-        if( !faculty_by_student && !is.null(roomFaculty) && !is.na(roomFaculty) && roomFaculty != "") {
-          tags$p(tags$b("Faculty:"), roomFaculty)
-        },
+        if (!is.null(room1) && !is.na(room1) && room1 != "") tags$p(tags$b("Room:"), room1),
+        if (!is.null(room2) && !is.na(room2) && room2 != "") tags$p(tags$b("Additional Room:"), room2),
+        if (!faculty_by_student && !is.null(roomFaculty) && !is.na(roomFaculty) && roomFaculty != "") tags$p(tags$b("Faculty:"), roomFaculty),
+        if (!is.null(duration) && !is.na(duration) && duration != "" && duration != 0) tags$p(tags$b("Duration:"), duration, "min"),
         tags$p(tags$b("Date:"), format(as.Date(group_date), "%A, %B %d, %Y")),
         tags$p(tags$b("Start time:"), format(strptime(format(as_hms(as.numeric(group_start) * 86400)), "%H:%M:%S"), "%I:%M %p")),
         tags$p(tags$b("End time:"), format(strptime(format(as_hms(as.numeric(group_end) * 86400)), "%H:%M:%S"), "%I:%M %p")),
-        if (!is.null(notes) && !is.na(notes) && notes != "") {
-          tags$p(tags$b("Notes:"), notes)
-        }
+        if (!is.null(notes) && !is.na(notes) && notes != "") tags$p(tags$b("Notes:"), notes)
       ),
       tags$table(
-        id = "station_schedule_table",  # <-- Added ID here
+        id = "station_schedule_table",
         style = "border-collapse:collapse;width:100%;margin:auto;",
         tags$thead(header),
         tags$tbody(rows)
