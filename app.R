@@ -23,6 +23,20 @@ fraction_to_posix <- function(frac) {
 
 # Helper to load all sheets
 load_data <- function(file) {
+  required_sheets <- c("studentInfo", "groupInfo", "fillColor", "timeBlockInfo", "schedule", "faculty")
+  sheets <- openxlsx::getSheetNames(file)
+  missing <- setdiff(required_sheets, sheets)
+  if (length(missing) > 0) {
+    showNotification(
+      paste0(
+        "The following required sheets are missing from the uploaded file: ",
+        paste(missing, collapse = ", ")
+      ),
+      type = "error",
+      duration = 10
+    )
+    return(NULL)
+  }
   list(
     studentInfo   = read.xlsx(file, sheet = "studentInfo", detectDates = TRUE),
     groupInfo     = read.xlsx(file, sheet = "groupInfo", detectDates = TRUE),
@@ -221,6 +235,9 @@ ui <- fluidPage(
       width = 12,
       class = "col-md-4 col-lg-3",
       style = "background-color: #f5f5f5; padding: 10px; border-right: 1px solid #ddd;",
+      h4("Event Information"),
+      textInput("event_nice_name", "Event Name (for display)", value = "", width = "100%"),
+      textInput("event_file_name", "Event File Name (for downloads)", value = "", width = "100%"),
       h2("Step 1:"),
       h3("Option (a)"),
       p("Enter the schedule information within the 'Enter Info' and 'Station Assignments' tabs"),
@@ -247,6 +264,8 @@ ui <- fluidPage(
       downloadButton("download", "Save Schedules to Excel", class = "btn-success", width = "100%"),
       hr(),
       downloadButton("download_students", "Download Individual Student Schedules", class = "btn-info", width = "100%"),
+      hr(),
+      downloadButton("download_station_schedules", "Download Station Schedules", class = "btn-warning", width = "100%"),
       
     ),
     column(
@@ -393,6 +412,12 @@ ui <- fluidPage(
           "Student Schedule",
           selectInput("student_select", "Select Student", choices = NULL),
           uiOutput("student_schedule_table")
+        ),
+        tabPanel(
+          "Station Schedule",
+          selectInput("station_group_select", "Select Group", choices = NULL),
+          selectInput("station_select", "Select Station", choices = NULL),
+          uiOutput("station_schedule_table")
         ),
         tabPanel(
           "Review data",
@@ -1272,7 +1297,15 @@ server <- function(input, output, session) {
 
     update_tmpl_group_info()
     group_panels <- lapply(seq_len(num_groups), function(g) {
-      group_label <- paste("Group", g)
+      # Use group name from group info if available
+      group_label <- {
+        group <- tmpl_group_info$groups[[g]]
+        if (!is.null(group) && !is.null(group$groupNum) && group$groupNum != "") {
+          paste("Group", group$groupNum)
+        } else {
+          paste("Group", g)
+        }
+      }
       group_date <- input[[paste0("tmpl_group_", g, "_date")]]
       group_timeOfDay <- input[[paste0("tmpl_group_", g, "_timeOfDay")]]
       time_label <- get_start_time_label(group_timeOfDay, start_time_names)
@@ -1377,6 +1410,14 @@ server <- function(input, output, session) {
   observeEvent(input$file, {
     req(input$file)
     tables <- load_data(input$file$datapath)
+
+    # Infer nice name from file name (remove extension, replace underscores with spaces)
+    fname <- input$file$name
+    base <- tools::file_path_sans_ext(basename(fname))
+    nice <- gsub("_", " ", base)
+    updateTextInput(session, "event_nice_name", value = nice)
+    updateTextInput(session, "event_file_name", value = base)
+
     data$studentInfo <- tables$studentInfo
     data$groupInfo <- tables$groupInfo
     data$fillColor <- tables$fillColor
@@ -1482,8 +1523,21 @@ server <- function(input, output, session) {
 
   updateTimeInfoFromUploadedData <- function(timeBlockInfo) {
     req(timeBlockInfo)
+    # Check structure: must have startTimeLabel, arrivalTime, leaveTime, and at least one BlockX_Start/BlockX_End
+    required_cols <- c("startTimeLabel", "arrivalTime", "leaveTime")
+    block_start_cols <- grep("^Block[0-9]+_Start$", names(timeBlockInfo), value = TRUE)
+    block_end_cols <- grep("^Block[0-9]+_End$", names(timeBlockInfo), value = TRUE)
+    if (!all(required_cols %in% names(timeBlockInfo)) || length(block_start_cols) == 0 || length(block_end_cols) == 0) {
+      showNotification(
+        "Uploaded timeBlockInfo sheet does not have the required columns (startTimeLabel, arrivalTime, leaveTime, BlockX_Start, BlockX_End). Skipping update.",
+        type = "error",
+        duration = 10
+      )
+      return(invisible(NULL))
+    }
+
     num_starttimes <- nrow(timeBlockInfo)
-    num_timeblocks <- length(grep("^Block[0-9]+_Start$", names(timeBlockInfo)))
+    num_timeblocks <- length(block_start_cols)
     # Update number of start times and time blocks
     updateNumericInput(session, "tmpl_num_starttimes", value = num_starttimes)
     updateNumericInput(session, "tmpl_num_timeblocks", value = num_timeblocks)
@@ -1566,14 +1620,15 @@ server <- function(input, output, session) {
         updateTextInput(session, inputId, value = val)
       }
     # By room: columns shortKey, group1, group2, ...
-    } else if ("shortKey" %in% names(facultyInfo) && any(grepl("^group[0-9]+$", names(facultyInfo)))) {
-      group_cols <- grep("^group[0-9]+$", names(facultyInfo), value = TRUE)
-      for (row in seq_len(nrow(facultyInfo))) {
+    } else if ("shortKey" %in% names(facultyInfo) && any(grepl("^group", names(facultyInfo)))) {
+      group_cols <- grep("^group", names(facultyInfo), value = TRUE)
+      for (row_idx in seq_len(nrow(facultyInfo))) {
         for (group_col in group_cols) {
-          g <- sub("^group", "", group_col)
-          val <- facultyInfo[[group_col]][row]
-          inputId <- paste0("faculty_room_", g, "_", row)
-          updateTextInput(session, inputId, value = val)
+            # Find the group index for this group_col (e.g., group1 -> 1, group2 -> 2, etc.)
+            group_index <- which(group_cols == group_col)
+            val <- facultyInfo[[group_col]][row_idx]
+            input_id <- paste0("faculty_room_", group_index, "_", row_idx)
+            updateTextInput(session, input_id, value = val)
         }
       }
     }
@@ -1619,13 +1674,26 @@ server <- function(input, output, session) {
     bordered = TRUE
   )
 
+
+  fraction_to_time <- function(x) {
+    if (is.na(x) || x == "") return("")
+    h <- floor(x * 24)
+    m <- round((x * 24 - h) * 60)
+    if (m == 60) {
+      h <- h + 1
+      m <- 0
+    }
+    sprintf("%02d:%02d", h, m)
+  }
+
+
   output$timeBlockInfo <- renderTable({
     req(data$timeBlockInfo)
     df <- data$timeBlockInfo
     # Find columns that are times (arrival, leave, _Start, _End)
     time_cols <- grep("Time$|_Start$|_End$", names(df), value = TRUE)
     for (col in time_cols) {
-      df[[col]] <- sapply(df[[col]], fraction_to_posix)
+      df[[col]] <- sapply(df[[col]], fraction_to_time)
     }
     df
   },
@@ -2060,6 +2128,149 @@ server <- function(input, output, session) {
     )
   })
 
+  # Update group choices for station schedule tab
+  observeEvent(data$groupInfo, {
+    req(data$groupInfo)
+    choices <- data$groupInfo$groupNum
+    updateSelectInput(session, "station_group_select", choices = choices)
+  })
+
+  # Update station choices for station schedule tab
+  observeEvent(data$schedule, {
+    req(data$schedule)
+    sched <- data$schedule
+    choices <- setNames(
+      sched$shortKey,
+      sched$niceName
+    )
+
+    updateSelectInput(session, "station_select", choices = choices)
+  })
+
+  # Show selected student's schedule (nice display)
+  output$station_schedule_table <- renderUI({
+    req(data$schedules, input$station_select, input$station_group_select)
+  
+    stationKey <- as.character(input$station_select)
+    niceName <- data$schedule$niceName[data$schedule$shortKey == stationKey]
+    groupNum <- as.character(input$station_group_select)
+    group_name <- paste0("Group_", groupNum)
+    if (!group_name %in% names(data$schedules)) return(NULL)
+    sched <- data$schedules[[group_name]]
+    group_date <- sched$date
+    group_start <- sched$startTime
+    group_end <- sched$endTime
+  
+    # Get station info from wide
+    station_wide <- sched$wide %>% filter(shortKey == !!stationKey)
+    if (nrow(station_wide) == 0) return(tags$div("No schedule found for this station"))
+    room1 <- station_wide$room1
+    room2 <- station_wide$room2
+    notes <- station_wide$notes
+    duration <- station_wide$timeInMin
+
+    faculty_by_student <- sched$faculty_by_student
+    roomFaculty <- if (!faculty_by_student) station_wide$faculty else NULL
+    timeblock_times <- sched$timeblock_times
+  
+    # Get all time blocks for this group/station
+    long_sched <- sched$long %>%
+      filter(shortKey == !!stationKey, groupNum == !!groupNum) %>%
+      arrange(timeBlock)
+    if (nrow(long_sched) == 0) return(tags$div("No schedule found for this station"))
+  
+    # Prepare merged rows
+    n <- nrow(long_sched)
+    rows <- list()
+    i <- 1
+    while (i <= n) {
+      row <- long_sched[i, ]
+      # Find how many subsequent rows have the same studentLabel
+      rowspan <- 1
+      while (
+        i + rowspan <= n &&
+        !is.na(long_sched$studentLabel[i]) &&
+        !is.na(long_sched$studentLabel[i + rowspan]) &&
+        long_sched$studentLabel[i] == long_sched$studentLabel[i + rowspan]
+      ) {
+        rowspan <- rowspan + 1
+      }
+      # Build rows for this group
+      for (j in 0:(rowspan - 1)) {
+        idx <- i + j
+        this_row <- long_sched[idx, ]
+        tb_time <- if (!is.null(timeblock_times[[this_row$timeBlock]])) timeblock_times[[this_row$timeBlock]] else this_row$timeBlock
+        # Only add the merged cell for the first row in the group
+        if (j == 0) {
+          station_info <- tags$div(
+            if (!is.null(this_row$studentLabel) && !is.na(this_row$studentLabel) && this_row$studentLabel != "") {
+              paste0("Student: ", this_row$studentLabel)
+            } else {
+              "Break"
+            },
+            if (faculty_by_student && !is.null(this_row$faculty) && !is.na(this_row$faculty) && this_row$faculty != "") {
+              list(tags$br(), paste0("Faculty: ", this_row$faculty))
+            }
+          )
+          studentNum <- if (!is.null(this_row$studentNum) && !is.na(this_row$studentNum)) this_row$studentNum else NA
+          student_color <- NULL
+          if (!is.na(studentNum) && studentNum %in% data$fillColor$studentNum) {
+            student_color <- data$fillColor$code[data$fillColor$studentNum == studentNum]
+          }
+          station_style <- if (!is.null(student_color) && student_color != "") {
+            paste0("background-color:", student_color, ";")
+          } else {
+            ""
+          }
+          rows[[length(rows) + 1]] <- tags$tr(
+            tags$td(tb_time),
+            tags$td(station_info, style = station_style, rowspan = rowspan)
+          )
+        } else {
+          # For subsequent rows, just add the time cell and skip the merged cell
+          rows[[length(rows) + 1]] <- tags$tr(
+            tags$td(tb_time)
+          )
+        }
+      }
+      i <- i + rowspan
+    }
+  
+    header <- tags$tr(
+      tags$th("Time"),
+      tags$th("Student Info")
+    )
+  
+    tagList(
+      tags$div(
+        tags$h4(niceName),
+        tags$p(tags$b("Group #:"), groupNum),
+        if (!is.null(room1) && !is.na(room1) && room1 != "") tags$p(tags$b("Room:"), room1),
+        if (!is.null(room2) && !is.na(room2) && room2 != "") tags$p(tags$b("Additional Room:"), room2),
+        if (!faculty_by_student && !is.null(roomFaculty) && !is.na(roomFaculty) && roomFaculty != "") tags$p(tags$b("Faculty:"), roomFaculty),
+        if (!is.null(duration) && !is.na(duration) && duration != "" && duration != 0) tags$p(tags$b("Duration:"), duration, "min"),
+        tags$p(tags$b("Date:"), format(as.Date(group_date), "%A, %B %d, %Y")),
+        tags$p(tags$b("Start time:"), format(strptime(format(as_hms(as.numeric(group_start) * 86400)), "%H:%M:%S"), "%I:%M %p")),
+        tags$p(tags$b("End time:"), format(strptime(format(as_hms(as.numeric(group_end) * 86400)), "%H:%M:%S"), "%I:%M %p")),
+        if (!is.null(notes) && !is.na(notes) && notes != "") tags$p(tags$b("Notes:"), notes)
+      ),
+      tags$table(
+        id = "station_schedule_table",
+        style = "border-collapse:collapse;width:100%;margin:auto;",
+        tags$thead(header),
+        tags$tbody(rows)
+      ) %>%
+        tagAppendChild(
+          tags$style(HTML("
+            #station_schedule_table tr th, #station_schedule_table tr td {
+              border: 1px solid #333 !important;
+              padding: 8px 12px !important;
+            }
+          "))
+        )
+    )
+  })
+
 
   ########################
   ## Download handlers
@@ -2067,7 +2278,9 @@ server <- function(input, output, session) {
 
   output$download <- downloadHandler(
     filename = function() {
-      "Generated_Schedules.xlsx"
+      fname <- input$event_file_name
+      if (is.null(fname) || fname == "") fname <- "Generated_Schedules"
+      paste0(fname, ".xlsx")
     },
     content = function(file) {
       wb <- createWorkbook()
@@ -2226,9 +2439,21 @@ server <- function(input, output, session) {
   # ---- Student Schedules Download Handler ----
   output$download_students <- downloadHandler(
     filename = function() {
-      "Student_Schedules.zip"
+      fname <- input$event_file_name
+      if (is.null(fname) || fname == ""){
+        fname <- "Student_Schedules"
+      } else {
+        fname <- paste0(fname, "_Student_Schedules")
+      }
+      paste0(fname, ".zip")
     },
     content = function(file) {
+      fname <- input$event_file_name
+      if (is.null(fname) || fname == ""){
+        fname <- "Student_Schedules"
+      } else {
+        fname <- paste0(fname, "_Student_Schedules")
+      }
       tmpdir <- tempdir()
       group_files <- c()
       for (group_name in names(data$schedules)) {
@@ -2314,11 +2539,147 @@ server <- function(input, output, session) {
             }
           }
         }
-        group_file <- file.path(tmpdir, paste0("Group_", groupNum, "_Student_Schedules.xlsx"))
+        group_file <- file.path(tmpdir, paste0(fname, "_Group_", groupNum, ".xlsx"))
+
         saveWorkbook(wb, group_file, overwrite = TRUE)
         group_files <- c(group_files, group_file)
       }
       # Zip all group files
+      zip::zip(zipfile = file, files = group_files, mode = "cherry-pick")
+    }
+  )
+
+  # Download station schedules -----------------
+    output$download_station_schedules <- downloadHandler(
+    filename = function() {
+      fname <- input$event_file_name
+      if (is.null(fname) || fname == ""){
+        fname <- "Station_Schedules"
+      } else {
+        fname <- paste0(fname, "_Station_Schedules")
+      }
+      paste0(fname, ".zip")
+    },
+    content = function(file) {
+      fname <- input$event_file_name
+      if (is.null(fname) || fname == ""){
+        fname <- "Station_Schedules"
+      } else {
+        fname <- paste0(fname, "_Station_Schedules")
+      }
+      tmpdir <- tempdir()
+      group_files <- c()
+      for (group_name in names(data$schedules)) {
+        sched <- data$schedules[[group_name]]
+        groupNum <- as.character(gsub("^Group_", "", group_name))
+        wb <- createWorkbook()
+        # For each station in this group
+        stations <- sched$wide$shortKey
+        for (i in seq_along(stations)) {
+          stationKey <- stations[i]
+          station_wide <- sched$wide[sched$wide$shortKey == stationKey, ]
+          station_long <- sched$long %>% filter(shortKey == stationKey, groupNum == groupNum) %>% arrange(timeBlock)
+          # Compose a unique worksheet name: shortKey_niceName, max 31 chars, replace forbidden chars
+          base_name <- paste0(station_wide$shortKey[1], "_", station_wide$niceName[1])
+          ws_name <- gsub("[\\[\\]\\*\\?/\\\\]", "_", base_name) # Excel-forbidden chars
+          ws_name <- substr(ws_name, 1, 31)
+          # Ensure uniqueness within this workbook
+          existing_names <- names(wb$worksheets)
+          if (ws_name %in% existing_names) {
+            suffix <- 1
+            repeat {
+              try_name <- substr(paste0(ws_name, "_", suffix), 1, 31)
+              if (!(try_name %in% existing_names)) {
+                ws_name <- try_name
+                break
+              }
+              suffix <- suffix + 1
+            }
+          }
+          if (nrow(station_long) == 0) next
+  
+          # Prepare merged rows as in the app
+          n <- nrow(station_long)
+          rows <- list()
+          i_row <- 1
+          while (i_row <= n) {
+            row <- station_long[i_row, ]
+            # Find how many subsequent rows have the same studentLabel
+            rowspan <- 1
+            while (
+              i_row + rowspan <= n &&
+              !is.na(station_long$studentLabel[i_row]) &&
+              !is.na(station_long$studentLabel[i_row + rowspan]) &&
+              station_long$studentLabel[i_row] == station_long$studentLabel[i_row + rowspan]
+            ) {
+              rowspan <- rowspan + 1
+            }
+            # Only add the merged cell for the first row in the group
+            for (j in 0:(rowspan - 1)) {
+              idx <- i_row + j
+              this_row <- station_long[idx, ]
+              tb_time <- if (!is.null(sched$timeblock_times[[this_row$timeBlock]])) sched$timeblock_times[[this_row$timeBlock]] else this_row$timeBlock
+              if (j == 0) {
+                student_info <- paste0(
+                  if (!is.null(this_row$studentLabel) && !is.na(this_row$studentLabel) && this_row$studentLabel != "") paste0("Student: ", this_row$studentLabel) else "Break",
+                  if (sched$faculty_by_student && !is.null(this_row$faculty) && !is.na(this_row$faculty) && this_row$faculty != "") paste0("\nFaculty: ", this_row$faculty) else ""
+                )
+                studentNum <- if (!is.null(this_row$studentNum) && !is.na(this_row$studentNum)) this_row$studentNum else NA
+                student_color <- if (!is.na(studentNum) && studentNum %in% data$fillColor$studentNum) data$fillColor$code[data$fillColor$studentNum == studentNum] else NA
+                rows[[length(rows) + 1]] <- c(tb_time, student_info, student_color, rowspan)
+              } else {
+                rows[[length(rows) + 1]] <- c(tb_time, "", NA, 1)
+              }
+            }
+            i_row <- i_row + rowspan
+          }
+          df <- as.data.frame(do.call(rbind, rows), stringsAsFactors = FALSE)
+          names(df) <- c("Time", "Student Info", "studentColor", "rowspan")
+          df$rowspan <- as.integer(df$rowspan)
+  
+          addWorksheet(wb, ws_name)
+          # Write station info as a header
+          info_lines <- c(
+            paste0("Group #: ", groupNum),
+            paste0("Station: ", station_wide$niceName[1]),
+            if (!is.null(station_wide$room1[1]) && !is.na(station_wide$room1[1]) && station_wide$room1[1] != "") paste0("Room: ", station_wide$room1[1]) else NULL,
+            if (!is.null(station_wide$room2[1]) && !is.na(station_wide$room2[1]) && station_wide$room2[1] != "") paste0("Additional Room: ", station_wide$room2[1]) else NULL,
+            if (!is.null(station_wide$faculty[1]) && !is.na(station_wide$faculty[1]) && station_wide$faculty[1] != "") paste0("Faculty: ", station_wide$faculty[1]) else NULL,
+            if (!is.null(station_wide$notes[1]) && !is.na(station_wide$notes[1]) && station_wide$notes[1] != "") paste0("Notes: ", station_wide$notes[1]) else NULL,
+            if (!is.null(station_wide$timeInMin[1]) && !is.na(station_wide$timeInMin[1]) && station_wide$timeInMin[1] != "" && station_wide$timeInMin[1] != 0) paste0("Duration: ", station_wide$timeInMin[1], " min") else NULL,
+            if (!is.null(sched$date) && !is.na(sched$date)) paste0("Date: ", format(as.Date(sched$date), "%A, %B %d, %Y")) else NULL
+          )
+          writeData(wb, ws_name, info_lines, startRow = 1, startCol = 1)
+          addStyle(wb, ws_name, createStyle(textDecoration = "bold", fontSize = 12), rows = 1, cols = 1, gridExpand = TRUE)
+          # Write the table below the info block
+          writeData(wb, ws_name, df[, 1:2], startRow = length(info_lines) + 2, startCol = 1, borders = "all", headerStyle = createStyle(textDecoration = "bold", border = "Bottom"))
+          setColWidths(wb, ws_name, cols = 1, widths = 18)
+          setColWidths(wb, ws_name, cols = 2, widths = 40)
+          wrap_style <- createStyle(wrapText = TRUE)
+          addStyle(wb, ws_name, wrap_style, rows = (length(info_lines) + 2):(nrow(df) + length(info_lines) + 2), cols = 1:2, gridExpand = TRUE, stack = TRUE)
+  
+          # Merge cells for student info if rowspan > 1
+          for (r in seq_len(nrow(df))) {
+            if (df$rowspan[r] > 1 && df$`Student Info`[r] != "") {
+              mergeCells(wb, ws_name, cols = 2, rows = (r + length(info_lines) + 2):(r + length(info_lines) + 2 + df$rowspan[r] - 1))
+            }
+          }
+          # Add color formatting for student info cells (column 2)
+          for (r in seq_len(nrow(df))) {
+            scol <- df$studentColor[r]
+            if (!is.na(scol) && scol != "") {
+              addStyle(
+                wb, ws_name,
+                createStyle(fgFill = scol),
+                rows = r + length(info_lines) + 2, cols = 2, gridExpand = TRUE, stack = TRUE
+              )
+            }
+          }
+        }
+        group_file <- file.path(tmpdir, paste0(fname, "_Group_", groupNum, ".xlsx"))
+        saveWorkbook(wb, group_file, overwrite = TRUE)
+        group_files <- c(group_files, group_file)
+      }
       zip::zip(zipfile = file, files = group_files, mode = "cherry-pick")
     }
   )
