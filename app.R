@@ -495,7 +495,7 @@ server <- function(input, output, session) {
   })
 
   # --- Observe and update time block times ---
-  observe({
+  update_tmpl_timeblock_times <- function (){
     req(input$tmpl_num_timeblocks, input$tmpl_num_starttimes)
     n_tb <- input$tmpl_num_timeblocks
     n_st <- input$tmpl_num_starttimes
@@ -522,6 +522,10 @@ server <- function(input, output, session) {
       to_remove <- setdiff(names(tmpl_inputs$timeblock_times), valid_keys)
       tmpl_inputs$timeblock_times[to_remove] <- NULL
     })
+  }
+
+  observe({
+    update_tmpl_timeblock_times()
   })
 
   # --- Observe and update group info ---
@@ -682,7 +686,9 @@ server <- function(input, output, session) {
   buildTimeblockUI <- function(num_starttimes, num_timeblocks){
     # Use uploaded values if updatingUIfromUploadedData() is TRUE and upload values exist
     use_upload <- updatingUIfromUploadedData() && !is.null(tmpl_inputs_upload$starttime_names) && length(tmpl_inputs_upload$starttime_names) > 0
-    use_upload <- FALSE 
+    # use_upload <- FALSE
+
+    update_tmpl_timeblock_times()
 
     start_names <- sapply(seq_len(num_starttimes), function(i) {
       key <- paste0("tmpl_starttime_name_", i)
@@ -1383,10 +1389,10 @@ server <- function(input, output, session) {
       start_col <- paste0("Block", tb, "_Start")
       end_col <- paste0("Block", tb, "_End")
       if (start_col %in% names(timeBlockInfo)) {
-        tmpl_inputs$timeblock_times[[paste0("tmpl_timeblock_", i, "_", tb, "_start")]] <- fraction_to_posix(timeBlockInfo[[start_col]][i])
+        tmpl_inputs_upload$timeblock_times[[paste0("tmpl_timeblock_", i, "_", tb, "_start")]] <- fraction_to_posix(timeBlockInfo[[start_col]][i])
       }
       if (end_col %in% names(timeBlockInfo)) {
-        tmpl_inputs$timeblock_times[[paste0("tmpl_timeblock_", i, "_", tb, "_end")]] <- fraction_to_posix(timeBlockInfo[[end_col]][i])
+        tmpl_inputs_upload$timeblock_times[[paste0("tmpl_timeblock_", i, "_", tb, "_end")]] <- fraction_to_posix(timeBlockInfo[[end_col]][i])
       }
       }
     }
