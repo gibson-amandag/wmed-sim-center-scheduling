@@ -631,9 +631,9 @@ server <- function(input, output, session) {
   output$tmpl_starttime_names_ui <- renderUI({
     req(input$tmpl_num_starttimes)
     n <- input$tmpl_num_starttimes
-    # Prefer upload values if present and non-empty
-    use_upload <- input$use_uploaded_values == "upload" && !is.null(tmpl_inputs_upload$starttime_names) && length(tmpl_inputs_upload$starttime_names) > 0
-    print(paste("Using upload values for start time names:", use_upload))
+    # Use uploading values when uploading
+    use_upload <- updatingUIfromUploadedData() && !is.null(tmpl_inputs_upload$starttime_names) && length(tmpl_inputs_upload$starttime_names) > 0
+    
     starttime_names <- if (use_upload) tmpl_inputs_upload$starttime_names else tmpl_inputs$starttime_names
     arrival_times <- if (use_upload) tmpl_inputs_upload$arrival_times else tmpl_inputs$arrival_times
     end_times <- if (use_upload) tmpl_inputs_upload$end_times else tmpl_inputs$end_times
@@ -680,9 +680,19 @@ server <- function(input, output, session) {
   })
 
   buildTimeblockUI <- function(num_starttimes, num_timeblocks){
+    # Use uploaded values if updatingUIfromUploadedData() is TRUE and upload values exist
+    use_upload <- updatingUIfromUploadedData() && !is.null(tmpl_inputs_upload$starttime_names) && length(tmpl_inputs_upload$starttime_names) > 0
+    use_upload <- FALSE 
+
     start_names <- sapply(seq_len(num_starttimes), function(i) {
       key <- paste0("tmpl_starttime_name_", i)
-      if (!is.null(tmpl_inputs$starttime_names[[key]])) tmpl_inputs$starttime_names[[key]] else if (i == 1) "AM" else if (i == 2) "PM" else paste0("Start", i)
+      if (use_upload) {
+        if (!is.null(tmpl_inputs_upload$starttime_names[[key]])) tmpl_inputs_upload$starttime_names[[key]]
+        else if (i == 1) "AM" else if (i == 2) "PM" else paste0("Start", i)
+      } else {
+        if (!is.null(tmpl_inputs$starttime_names[[key]])) tmpl_inputs$starttime_names[[key]]
+        else if (i == 1) "AM" else if (i == 2) "PM" else paste0("Start", i)
+      }
     })
     fluidRow(
       lapply(seq_len(num_starttimes), function(st_idx) {
@@ -708,6 +718,14 @@ server <- function(input, output, session) {
             start_key <- paste0("tmpl_timeblock_", st_idx, "_", tb_idx, "_start")
             end_key <- paste0("tmpl_timeblock_", st_idx, "_", tb_idx, "_end")
             label <- start_names[st_idx]
+            # Use uploaded or current values for stored times
+            if (use_upload) {
+              stored_start <- tmpl_inputs_upload$timeblock_times[[start_key]]
+              stored_end <- tmpl_inputs_upload$timeblock_times[[end_key]]
+            } else {
+              stored_start <- tmpl_inputs$timeblock_times[[start_key]]
+              stored_end <- tmpl_inputs$timeblock_times[[end_key]]
+            }
             if (tolower(label) == "am") {
               start_minutes <- 8 * 60 + (tb_idx - 1) * 30
               end_minutes <- start_minutes + 30
@@ -722,8 +740,6 @@ server <- function(input, output, session) {
               default_start <- NA
               default_end <- NA
             }
-            stored_start <- tmpl_inputs$timeblock_times[[start_key]]
-            stored_end <- tmpl_inputs$timeblock_times[[end_key]]
             fluidRow(
               column(
                 6,
@@ -1323,6 +1339,7 @@ server <- function(input, output, session) {
     uploadedTables$tables <- tables
 
     updateRadioButtons(session, "use_uploaded_values", selected = "upload")
+    updatingUIfromUploadedData(TRUE)
 
     # Update template info from uploaded data
     updateTemplateInfoFromUploadedData(tables)
@@ -1346,10 +1363,9 @@ server <- function(input, output, session) {
 
 
     delay(1000, {
-      print("Delay completed, updating UI from uploaded data")
       updateRadioButtons(session, "use_uploaded_values", selected = "edit")
+      updatingUIfromUploadedData(FALSE)
     })
-    updatingUIfromUploadedData(FALSE)
   })
 
   updateTemplateInfoFromUploadedData <- function (tables){
@@ -1367,17 +1383,13 @@ server <- function(input, output, session) {
       start_col <- paste0("Block", tb, "_Start")
       end_col <- paste0("Block", tb, "_End")
       if (start_col %in% names(timeBlockInfo)) {
-        tmpl_inputs_upload$timeblock_times[[paste0("tmpl_timeblock_", i, "_", tb, "_start")]] <- fraction_to_posix(timeBlockInfo[[start_col]][i])
+        tmpl_inputs$timeblock_times[[paste0("tmpl_timeblock_", i, "_", tb, "_start")]] <- fraction_to_posix(timeBlockInfo[[start_col]][i])
       }
       if (end_col %in% names(timeBlockInfo)) {
-        tmpl_inputs_upload$timeblock_times[[paste0("tmpl_timeblock_", i, "_", tb, "_end")]] <- fraction_to_posix(timeBlockInfo[[end_col]][i])
+        tmpl_inputs$timeblock_times[[paste0("tmpl_timeblock_", i, "_", tb, "_end")]] <- fraction_to_posix(timeBlockInfo[[end_col]][i])
       }
       }
     }
-
-    # Print a timestamp for debugging when loading uploaded data
-    print(paste("updateTemplateInfoFromUploadedData called at", Sys.time()))
-    print(str(tmpl_inputs_upload$starttime_names))
 
     groupInfo <- tables$groupInfo
     startTimeLabels <- tables$timeBlockInfo$startTimeLabel
