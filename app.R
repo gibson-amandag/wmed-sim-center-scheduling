@@ -237,7 +237,8 @@ ui <- fluidPage(
       style = "background-color: #f5f5f5; padding: 10px; border-right: 1px solid #ddd;",
       h4("Event Information"),
       textInput("event_nice_name", "Event Name (for display)", value = "", width = "100%"),
-      textInput("event_file_name", "Event File Name (for downloads)", value = "", width = "100%"),
+      textInput("event_faculty_contact", "Faculty Contact", value = "", width = "100%"),
+      textInput("event_file_name", "File Name (for downloads)", value = "", width = "100%"),
       h2("Step 1:"),
       h3("Option (a)"),
       p("Enter the schedule information within the 'Enter Info' and 'Station Assignments' tabs"),
@@ -1418,11 +1419,23 @@ server <- function(input, output, session) {
     req(input$file)
     tables <- load_data(input$file$datapath)
 
+    sheets <- openxlsx::getSheetNames(input$file$datapath)
+    if ("Event Info" %in% sheets) {
+      event_info <- read.xlsx(input$file$datapath, sheet = "Event Info")
+      if ("Field" %in% names(event_info) && "Value" %in% names(event_info)) {
+        if ("Event Name" %in% event_info$Field) {
+          updateTextInput(session, "event_nice_name", value = event_info$Value[event_info$Field == "Event Name"][1])
+        }
+        if ("Faculty Contact" %in% event_info$Field) {
+          updateTextInput(session, "event_faculty_contact", value = event_info$Value[event_info$Field == "Faculty Contact"][1])
+        }
+      }
+    }
+
     # Infer nice name from file name (remove extension, replace underscores with spaces)
     fname <- input$file$name
     base <- tools::file_path_sans_ext(basename(fname))
     nice <- gsub("_", " ", base)
-    updateTextInput(session, "event_nice_name", value = nice)
     updateTextInput(session, "event_file_name", value = base)
 
     data$studentInfo <- tables$studentInfo
@@ -2476,6 +2489,14 @@ server <- function(input, output, session) {
         update_tmpl_fillColor()
         tmpl <- template_data()
 
+        addWorksheet(wb, "Event Info")
+        event_info <- data.frame(
+          Field = c("Event Name", "Faculty Contact"),
+          Value = c(input$event_nice_name, input$event_faculty_contact),
+          stringsAsFactors = FALSE
+        )
+        writeDataTable(wb, "Event Info", event_info, tableStyle = "TableStyleLight1")
+
         addWorksheet(wb, "studentInfo")
         writeDataTable(wb, "studentInfo", tmpl$studentInfo, tableStyle = "TableStyleLight1")
         shiny::setProgress(value = 1/n_steps, detail = "studentInfo sheet")
@@ -2757,7 +2778,7 @@ server <- function(input, output, session) {
     )
     
     # --- 3. Faculty contact row ---
-    faculty_contact <- "Faculty Contact: ____________________________"
+    faculty_contact <- paste0("Faculty Contact: ", input$event_faculty_contact)
     writeData(wb, sheet_name, faculty_contact, startRow = 3, startCol = 1)
     mergeCells(wb, sheet_name, cols = 1:(total_cols + 1), rows = 3)
     addStyle(
