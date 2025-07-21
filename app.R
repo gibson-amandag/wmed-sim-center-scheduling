@@ -2477,194 +2477,221 @@ server <- function(input, output, session) {
         message = "Saving schedules...",
         value = 0,
         {
-        wb <- createWorkbook()
-        n_scheds <- length(names(data$schedules))
-        n_steps <- 7 + n_scheds # 7 template sheets + n group schedules + 1 overview
+          wb <- createWorkbook()
+          sched_names <- names(data$schedules)
+          n_scheds <- length(sched_names)
+          n_steps <- 8 + n_scheds # 8 template sheets + n group schedules + 1 overview
+  
+          currentStep <- 1
 
-        # --- Add template sheets first ---
-        update_tmpl_starttime_names()
-        update_tmpl_group_info()
-        update_tmpl_station_info()
-        update_faculty_assignments()
-        update_tmpl_fillColor()
-        tmpl <- template_data()
+          # --- Event Overview Calendar ---
+          add_event_overview_calendar_sheet(wb, "Event Overview Calendar", data$groupInfo, data$timeBlockInfo, input$event_nice_name)
+          shiny::setProgress(value = currentStep/n_steps, detail = "Event Overview Calendar")
+          currentStep <- currentStep + 1
 
-        addWorksheet(wb, "Event Info")
-        event_info <- data.frame(
-          Field = c("Event Name", "Faculty Contact"),
-          Value = c(input$event_nice_name, input$event_faculty_contact),
-          stringsAsFactors = FALSE
+          # --- Group schedules ---
+          write_group_schedules_to_workbook(
+            wb = wb,
+            schedules = data$schedules,
+            fillColor = data$fillColor,
+            n_steps = n_steps,
+            progress_offset = currentStep - 1 # so currentStep is incremented for each group
+          )
+          currentStep <- currentStep + n_scheds
+  
+          # --- Add template sheets ---
+          update_tmpl_starttime_names()
+          update_tmpl_group_info()
+          update_tmpl_station_info()
+          update_faculty_assignments()
+          update_tmpl_fillColor()
+          tmpl <- template_data()
+  
+          addWorksheet(wb, "Event Info")
+          event_info <- data.frame(
+            Field = c("Event Name", "Faculty Contact"),
+            Value = c(input$event_nice_name, input$event_faculty_contact),
+            stringsAsFactors = FALSE
+          )
+          writeDataTable(wb, "Event Info", event_info, tableStyle = "TableStyleLight1")
+          shiny::setProgress(value = currentStep/n_steps, detail = "Event Info sheet")
+          currentStep <- currentStep + 1
+  
+          addWorksheet(wb, "studentInfo")
+          writeDataTable(wb, "studentInfo", tmpl$studentInfo, tableStyle = "TableStyleLight1")
+          shiny::setProgress(value = currentStep/n_steps, detail = "studentInfo sheet")
+          currentStep <- currentStep + 1
+  
+          addWorksheet(wb, "groupInfo")
+          writeDataTable(wb, "groupInfo", tmpl$groupInfo, tableStyle = "TableStyleLight1")
+          shiny::setProgress(value = currentStep/n_steps, detail = "groupInfo sheet")
+          currentStep <- currentStep + 1
+  
+          addWorksheet(wb, "fillColor")
+          writeData(wb, "fillColor", tmpl$fillColor)
+          for (i in seq_len(nrow(tmpl$fillColor))) {
+            color <- tmpl$fillColor$code[i]
+            if (!is.null(color) && color != "") {
+              addStyle(
+                wb, "fillColor",
+                createStyle(fgFill = color),
+                rows = i + 1,
+                cols = 2,
+                gridExpand = TRUE,
+                stack = TRUE
+              )
+            }
+          }
+          shiny::setProgress(value = currentStep/n_steps, detail = "fillColor sheet")
+          currentStep <- currentStep + 1
+  
+          addWorksheet(wb, "timeBlockInfo")
+          writeDataTable(wb, "timeBlockInfo", tmpl$timeBlockInfo, tableStyle = "TableStyleLight1")
+          time_style <- createStyle(numFmt = "hh:mm")
+          time_cols <- which(grepl("Time$|_Start$|_End$", names(tmpl$timeBlockInfo)))
+          addStyle(
+            wb, "timeBlockInfo", time_style,
+            rows = 2:(nrow(tmpl$timeBlockInfo) + 1),
+            cols = time_cols,
+            gridExpand = TRUE, stack = TRUE
+          )
+          shiny::setProgress(value = currentStep/n_steps, detail = "timeBlockInfo sheet")
+          currentStep <- currentStep + 1
+  
+          addWorksheet(wb, "schedule")
+          writeDataTable(wb, "schedule", tmpl$schedule, tableStyle = "TableStyleLight1")
+          shiny::setProgress(value = currentStep/n_steps, detail = "schedule sheet")
+          currentStep <- currentStep + 1
+  
+          addWorksheet(wb, "faculty")
+          writeDataTable(wb, "faculty", tmpl$faculty, tableStyle = "TableStyleLight1")
+          shiny::setProgress(value = currentStep/n_steps, detail = "faculty sheet")
+          currentStep <- currentStep + 1
+  
+          saveWorkbook(wb, file, overwrite = TRUE)
+          shiny::setProgress(value = 1, detail = "Done")
+        }
+      )
+    }
+  )
+
+  write_group_schedules_to_workbook <- function(wb, schedules, fillColor, n_steps, progress_offset = 6) {
+    sched_names <- names(schedules)
+    for (idx in seq_along(sched_names)) {
+      name <- sched_names[idx]
+      sched <- schedules[[name]]
+      ws_name <- substr(name, 1, 31)
+  
+      # Add worksheet for each group
+      addWorksheet(wb, ws_name)
+  
+      # Prepare header row: Station + time labels
+      timeblock_cols <- grep("^TimeBlock", names(sched$wide), value = TRUE)
+      timeblock_times <- sched$timeblock_times
+      header <- c("Station", sapply(timeblock_cols, function(tb) {
+        if (!is.null(timeblock_times[[tb]])) timeblock_times[[tb]] else tb
+      }))
+  
+      # Prepare data rows (do not merge yet)
+      rows <- lapply(seq_len(nrow(sched$wide)), function(i) {
+        row <- sched$wide[i, ]
+        # Use stationColor if present
+        station_color <- if ("stationColor" %in% names(row) && !is.na(row$stationColor) && row$stationColor != "") row$stationColor else NA
+        station_info <- paste0(
+          row$niceName,
+          if (!is.null(row$room1) && !is.na(row$room1) && row$room1 != "") paste0("\nRoom: ", row$room1) else "",
+          if (!is.null(row$room2) && !is.na(row$room2) && row$room2 != "") paste0("\nRoom: ", row$room2) else "",
+          if (!is.null(row$faculty) && !is.na(row$faculty) && row$faculty != "") paste0("\nFaculty: ", row$faculty) else "Faculty: TBD",
+          if (!is.null(row$notes) && !is.na(row$notes) && row$notes != "") paste0("\nNotes: ", row$notes) else ""
         )
-        writeDataTable(wb, "Event Info", event_info, tableStyle = "TableStyleLight1")
-
-        addWorksheet(wb, "studentInfo")
-        writeDataTable(wb, "studentInfo", tmpl$studentInfo, tableStyle = "TableStyleLight1")
-        shiny::setProgress(value = 1/n_steps, detail = "studentInfo sheet")
-
-        addWorksheet(wb, "groupInfo")
-        writeDataTable(wb, "groupInfo", tmpl$groupInfo, tableStyle = "TableStyleLight1")
-        shiny::setProgress(value = 2/n_steps, detail = "groupInfo sheet")
-
-        addWorksheet(wb, "fillColor")
-        writeData(wb, "fillColor", tmpl$fillColor)
-        for (i in seq_len(nrow(tmpl$fillColor))) {
-          color <- tmpl$fillColor$code[i]
-          if (!is.null(color) && color != "") {
+        c(station_info, as.character(unlist(row[timeblock_cols])), station_color)
+      })
+      # Add stationColor as a hidden column for later styling
+      df <- as.data.frame(do.call(rbind, rows), stringsAsFactors = FALSE)
+      names(df) <- c(header, "stationColor__internal__")
+  
+      # Write date as a title row above the table
+      writeData(wb, ws_name, paste0("Date: ", format(as.Date(sched$date), "%A, %B %d, %Y")), startRow = 1, startCol = 1)
+      addStyle(wb, ws_name, createStyle(textDecoration = "bold", halign = "center", fontSize = 14), rows = 1, cols = 1, gridExpand = TRUE)
+      mergeCells(wb, ws_name, cols = 1:(length(header)), rows = 1)
+  
+      # Write the table below the date (exclude the internal color column)
+      writeData(wb, ws_name, df[, 1:length(header)], startRow = 3, startCol = 1, borders = "all", headerStyle = createStyle(textDecoration = "bold", border = "Bottom"))
+  
+      # Set column width for column A (Station column)
+      setColWidths(wb, ws_name, cols = 1, widths = 40)
+      setColWidths(wb, ws_name, cols = 2:length(header), widths = 26)
+  
+      # Wrap text for all data and header cells
+      wrap_style <- createStyle(wrapText = TRUE)
+      addStyle(wb, ws_name, wrap_style, rows = 3:(nrow(df) + 3), cols = 1:length(header), gridExpand = TRUE, stack = TRUE)
+  
+      # Merge adjacent cells with the same value for each row (timeblock columns only)
+      for (i in seq_len(nrow(df))) {
+        start_col <- 2 # first timeblock col
+        end_col <- length(header)
+        j <- start_col
+        while (j <= end_col) {
+          val <- df[i, j]
+          run_start <- j
+          while (j < end_col && df[i, j + 1] == val && val != "" && !is.na(val)) {
+            j <- j + 1
+          }
+          if (j > run_start) {
+            mergeCells(wb, ws_name, cols = run_start:j, rows = i + 3)
+            # Only keep value in first cell, blank out others
+            for (k in (run_start + 1):j) {
+              writeData(wb, ws_name, "", startCol = k, startRow = i + 3)
+            }
+          }
+          j <- j + 1
+        }
+      }
+  
+      # Add color formatting for station info cells (column 1)
+      for (i in seq_len(nrow(df))) {
+        scol <- df$stationColor__internal__[i]
+        if (!is.na(scol) && scol != "") {
+          addStyle(
+            wb, ws_name,
+            createStyle(fgFill = scol),
+            rows = i + 3, cols = 1, gridExpand = TRUE, stack = TRUE
+          )
+        }
+      }
+  
+      # Optionally, add color formatting for student cells
+      for (col in seq_along(timeblock_cols)) {
+        tb <- timeblock_cols[col]
+        for (i in seq_len(nrow(sched$wide))) {
+          val <- sched$wide[[tb]][i]
+          studentNum <- NA
+          if (!is.na(val) && val != "") {
+            matches <- regmatches(val, regexpr("^[0-9]+", val))
+            if (length(matches) > 0 && matches != "") {
+              studentNum <- as.integer(matches)
+            }
+          }
+          color <- NULL
+          if (!is.na(studentNum) && studentNum %in% fillColor$studentNum) {
+            color <- fillColor$code[fillColor$studentNum == studentNum]
+          } else if (is.na(val) || val == "") {
+            color <- "#717171"
+          }
+          if (!is.null(color)) {
             addStyle(
-              wb, "fillColor",
-              createStyle(fgFill = color),
-              rows = i + 1,
-              cols = 2,
-              gridExpand = TRUE,
-              stack = TRUE
+              wb, ws_name,
+              createStyle(fgFill = color, halign = "center", textDecoration = NULL, fontColour = ifelse(color == "#717171", "#FFFFFF", "#000000")),
+              rows = i + 3, cols = col + 1, gridExpand = TRUE, stack = TRUE
             )
           }
         }
-        shiny::setProgress(value = 3/n_steps, detail = "fillColor sheet")
-
-        addWorksheet(wb, "timeBlockInfo")
-        writeDataTable(wb, "timeBlockInfo", tmpl$timeBlockInfo, tableStyle = "TableStyleLight1")
-        time_style <- createStyle(numFmt = "hh:mm")
-        time_cols <- which(grepl("Time$|_Start$|_End$", names(tmpl$timeBlockInfo)))
-        addStyle(
-          wb, "timeBlockInfo", time_style,
-          rows = 2:(nrow(tmpl$timeBlockInfo) + 1),
-          cols = time_cols,
-          gridExpand = TRUE, stack = TRUE
-        )
-        shiny::setProgress(value = 4/n_steps, detail = "timeBlockInfo sheet")
-
-        addWorksheet(wb, "schedule")
-        writeDataTable(wb, "schedule", tmpl$schedule, tableStyle = "TableStyleLight1")
-        shiny::setProgress(value = 5/n_steps, detail = "schedule sheet")
-
-        addWorksheet(wb, "faculty")
-        writeDataTable(wb, "faculty", tmpl$faculty, tableStyle = "TableStyleLight1")
-        shiny::setProgress(value = 6/n_steps, detail = "faculty sheet")
-
-        # --- Group schedules ---
-        sched_names <- names(data$schedules)
-        for (idx in seq_along(sched_names)) {
-          name <- sched_names[idx]
-          sched <- data$schedules[[name]]
-          ws_name <- substr(name, 1, 31)
-
-            # Add worksheet for each group
-            addWorksheet(wb, ws_name)
-
-            # Prepare header row: Station + time labels
-            timeblock_cols <- grep("^TimeBlock", names(sched$wide), value = TRUE)
-            timeblock_times <- sched$timeblock_times
-            header <- c("Station", sapply(timeblock_cols, function(tb) {
-              if (!is.null(timeblock_times[[tb]])) timeblock_times[[tb]] else tb
-            }))
-
-            # Prepare data rows (do not merge yet)
-            rows <- lapply(seq_len(nrow(sched$wide)), function(i) {
-              row <- sched$wide[i, ]
-              # Use stationColor if present
-              station_color <- if ("stationColor" %in% names(row) && !is.na(row$stationColor) && row$stationColor != "") row$stationColor else NA
-              station_info <- paste0(
-                row$niceName,
-                if (!is.null(row$room1) && !is.na(row$room1) && row$room1 != "") paste0("\nRoom: ", row$room1) else "",
-                if (!is.null(row$room2) && !is.na(row$room2) && row$room2 != "") paste0("\nRoom: ", row$room2) else "",
-                if (!is.null(row$faculty) && !is.na(row$faculty) && row$faculty != "") paste0("\nFaculty: ", row$faculty) else "Faculty: TBD",
-                if (!is.null(row$notes) && !is.na(row$notes) && row$notes != "") paste0("\nNotes: ", row$notes) else ""
-              )
-              c(station_info, as.character(unlist(row[timeblock_cols])), station_color)
-            })
-            # Add stationColor as a hidden column for later styling
-            df <- as.data.frame(do.call(rbind, rows), stringsAsFactors = FALSE)
-            names(df) <- c(header, "stationColor__internal__")
-
-            # Write date as a title row above the table
-            writeData(wb, ws_name, paste0("Date: ", format(as.Date(sched$date), "%A, %B %d, %Y")), startRow = 1, startCol = 1)
-            addStyle(wb, ws_name, createStyle(textDecoration = "bold", halign = "center", fontSize = 14), rows = 1, cols = 1, gridExpand = TRUE)
-            mergeCells(wb, ws_name, cols = 1:(length(header)), rows = 1)
-
-            # Write the table below the date (exclude the internal color column)
-            writeData(wb, ws_name, df[, 1:length(header)], startRow = 3, startCol = 1, borders = "all", headerStyle = createStyle(textDecoration = "bold", border = "Bottom"))
-
-            # Set column width for column A (Station column)
-            setColWidths(wb, ws_name, cols = 1, widths = 40)
-            setColWidths(wb, ws_name, cols = 2:length(header), widths = 26)
-
-            # Wrap text for all data and header cells
-            wrap_style <- createStyle(wrapText = TRUE)
-            addStyle(wb, ws_name, wrap_style, rows = 3:(nrow(df) + 3), cols = 1:length(header), gridExpand = TRUE, stack = TRUE)
-
-            # Merge adjacent cells with the same value for each row (timeblock columns only)
-            for (i in seq_len(nrow(df))) {
-              start_col <- 2 # first timeblock col
-              end_col <- length(header)
-              j <- start_col
-              while (j <= end_col) {
-                val <- df[i, j]
-                run_start <- j
-                while (j < end_col && df[i, j + 1] == val && val != "" && !is.na(val)) {
-                  j <- j + 1
-                }
-                if (j > run_start) {
-                  mergeCells(wb, ws_name, cols = run_start:j, rows = i + 3)
-                  # Only keep value in first cell, blank out others
-                  for (k in (run_start + 1):j) {
-                    writeData(wb, ws_name, "", startCol = k, startRow = i + 3)
-                  }
-                }
-                j <- j + 1
-              }
-            }
-
-            # Add color formatting for station info cells (column 1)
-            for (i in seq_len(nrow(df))) {
-              scol <- df$stationColor__internal__[i]
-              if (!is.na(scol) && scol != "") {
-                addStyle(
-                  wb, ws_name,
-                  createStyle(fgFill = scol),
-                  rows = i + 3, cols = 1, gridExpand = TRUE, stack = TRUE
-                )
-              }
-            }
-
-            # Optionally, add color formatting for student cells
-            for (col in seq_along(timeblock_cols)) {
-              tb <- timeblock_cols[col]
-              for (i in seq_len(nrow(sched$wide))) {
-                val <- sched$wide[[tb]][i]
-                studentNum <- NA
-                if (!is.na(val) && val != "") {
-                  matches <- regmatches(val, regexpr("^[0-9]+", val))
-                  if (length(matches) > 0 && matches != "") {
-                    studentNum <- as.integer(matches)
-                  }
-                }
-                color <- NULL
-                if (!is.na(studentNum) && studentNum %in% data$fillColor$studentNum) {
-                  color <- data$fillColor$code[data$fillColor$studentNum == studentNum]
-                } else if (is.na(val) || val == "") {
-                  color <- "#717171"
-                }
-                if (!is.null(color)) {
-                  addStyle(
-                    wb, ws_name,
-                    createStyle(fgFill = color, halign = "center", textDecoration = NULL, fontColour = ifelse(color == "#717171", "#FFFFFF", "#000000")),
-                    rows = i + 3, cols = col + 1, gridExpand = TRUE, stack = TRUE
-                  )
-                }
-              }
-            }
-            shiny::setProgress(value = (6 + idx)/n_steps, detail = paste("Saving", ws_name))
-          }
-
-        add_event_overview_calendar_sheet(wb, "Event Overview Calendar", data$groupInfo, data$timeBlockInfo, input$event_nice_name)
-        shiny::setProgress(value = (6 + n_scheds + 1)/n_steps, detail = "Event Overview Calendar")
-        
-        saveWorkbook(wb, file, overwrite = TRUE)
-        shiny::setProgress(value = 1, detail = "Done")
-      })
+      }
+  
+      # Progress update
+      shiny::setProgress(value = (progress_offset + idx)/n_steps, detail = paste("Saving", ws_name))
     }
-  )
+  }
 
   add_event_overview_calendar_sheet <- function(wb, sheet_name = "Event Overview Calendar", group_df, tb_info, event_nice_name = "Event") {
     addWorksheet(wb, sheet_name)
