@@ -2359,7 +2359,9 @@ server <- function(input, output, session) {
     body_rows <- list()
     for (t in seq_along(time_seq)) {
       row_cells <- list(tags$td(time_labels[t]))
-      for (d in all_dates) {
+      col_counter <- 1
+      for (d_idx in seq_along(all_dates)) {
+        d <- all_dates[d_idx]
         day_events <- date_columns[[d]]
         ncol <- max(day_events$col)
         for (col_idx in seq_len(ncol)) {
@@ -2372,23 +2374,28 @@ server <- function(input, output, session) {
               rows_to_cover <- t + seq_len(span) - 1
               rows_to_cover <- rows_to_cover[rows_to_cover <= nrow(covered[[d]])]
               covered[[d]][rows_to_cover, col_idx] <- TRUE
+              # Add thick border class if this is the first col of a day (but not the first day)
+              td_class <- if (col_idx == 1 && d_idx > 1) "thick-border-left" else NULL
               row_cells[[length(row_cells) + 1]] <- tags$td(
                 paste0("Group ", ev$groupNum[k]),
                 style = "background:#e0f7fa;font-weight:bold;text-align:center;",
-                rowspan = span
+                rowspan = span,
+                class = td_class
               )
               found <- TRUE
               break
             }
           }
           if (!found) {
-            row_cells[[length(row_cells) + 1]] <- tags$td("")
+            td_class <- if (col_idx == 1 && d_idx > 1) "thick-border-left" else NULL
+            row_cells[[length(row_cells) + 1]] <- tags$td("", class = td_class)
           }
+          col_counter <- col_counter + 1
         }
       }
       body_rows[[length(body_rows) + 1]] <- tags$tr(row_cells)
     }
-  
+    
     tags$table(
       style = "border-collapse:collapse;width:100%;margin:auto;",
       tags$thead(header1),
@@ -2407,6 +2414,9 @@ server <- function(input, output, session) {
           }
           table tr td {
             text-align: center;
+          }
+          .thick-border-left {
+            border-left: 4px solid #333 !important;
           }
         "))
       )
