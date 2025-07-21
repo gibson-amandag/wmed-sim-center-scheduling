@@ -2611,9 +2611,152 @@ server <- function(input, output, session) {
           }
         }
       }
+
+    add_event_overview_calendar_sheet(wb, "Event Overview Calendar", data$groupInfo, data$timeBlockInfo, input$event_nice_name)
+
       saveWorkbook(wb, file, overwrite = TRUE)
     }
   )
+
+    add_event_overview_calendar_sheet <- function(wb, sheet_name = "Event Overview Calendar", group_df, tb_info, event_nice_name = "Event") {
+    addWorksheet(wb, sheet_name)
+    
+    # Helper to convert fraction to POSIXct
+    get_time_tod <- function(frac) {
+      as.POSIXct(sprintf("%02d:%02d", floor(frac * 24), round((frac * 24 - floor(frac * 24)) * 60)), format="%H:%M", tz="UTC")
+    }
+    
+    # Build events data.frame
+    events <- lapply(seq_len(nrow(group_df)), function(i) {
+      row <- group_df[i, ]
+      tb_row <- which(tb_info$startTimeLabel == row$timeOfDay)
+      if (length(tb_row) == 1) {
+        arrival <- tb_info$arrivalTime[tb_row]
+        leave <- tb_info$leaveTime[tb_row]
+        list(
+          groupNum = row$groupNum,
+          date = as.character(row$date),
+          start_tod = get_time_tod(arrival),
+          end_tod = get_time_tod(leave),
+          groupColor = if ("groupColor" %in% names(group_df)) row$groupColor else "#e0f7fa"
+        )
+      } else {
+        NULL
+      }
+    })
+    events <- do.call(rbind, lapply(events, as.data.frame))
+    if (is.null(events) || nrow(events) == 0) {
+      writeData(wb, sheet_name, "No group events found.")
+      return(invisible(NULL))
+    }
+    
+    all_dates <- sort(unique(events$date))
+    min_tod <- min(events$start_tod)
+    max_tod <- max(events$end_tod)
+    time_seq <- seq(from = min_tod, to = max_tod, by = "15 min")
+    
+    # Build date_columns structure (same as in Shiny)
+    date_columns <- list()
+    for (d in all_dates) {
+      day_events <- events[events$date == d, ]
+      cols <- rep(NA_integer_, nrow(day_events))
+      col_end <- c()
+      for (i in order(day_events$start_tod)) {
+        assigned <- FALSE
+        for (j in seq_along(col_end)) {
+          if (day_events$start_tod[i] >= col_end[j]) {
+            cols[i] <- j
+            col_end[j] <- day_events$end_tod[i]
+            assigned <- TRUE
+            break
+          }
+        }
+        if (!assigned) {
+          cols[i] <- length(col_end) + 1
+          col_end <- c(col_end, day_events$end_tod[i])
+        }
+      }
+      day_events$col <- cols
+      date_columns[[d]] <- day_events
+    }
+    ncols_by_date <- sapply(date_columns, function(df) max(df$col))
+    total_cols <- sum(ncols_by_date)
+    
+    # Build header row
+    header <- c("Time", unlist(lapply(seq_along(all_dates), function(i) {
+      rep(format(as.Date(all_dates[i]), "%a %b %d"), ncols_by_date[i])
+    })))
+    writeData(wb, sheet_name, t(header), startRow = 1, startCol = 1, colNames = FALSE)
+    
+    # Build body
+    row_idx <- 2
+    covered <- lapply(all_dates, function(d) {
+      ncol <- max(date_columns[[d]]$col)
+      matrix(FALSE, nrow = length(time_seq), ncol = ncol)
+    })
+    names(covered) <- all_dates
+    
+    for (t in seq_along(time_seq)) {
+      hour_label <- if (format(time_seq[t], "%M") == "00") format(time_seq[t], "%H:%M") else ""
+      row <- rep("", total_cols + 1)
+      row[1] <- hour_label
+      col_counter <- 2
+      for (d_idx in seq_along(all_dates)) {
+        d <- all_dates[d_idx]
+        day_events <- date_columns[[d]]
+        ncol <- max(day_events$col)
+        for (col_idx in seq_len(ncol)) {
+          if (covered[[d]][t, col_idx]) {
+            col_counter <- col_counter + 1
+            next
+          }
+          ev <- day_events[day_events$col == col_idx, ]
+          found <- FALSE
+          for (k in seq_len(nrow(ev))) {
+            if (abs(as.numeric(difftime(time_seq[t], ev$start_tod[k], units = "mins"))) < 1) {
+              # Write event info
+              row[col_counter] <- paste0(
+                event_nice_name, "\n",
+                "Group ", ev$groupNum[k], "\n",
+                "(", format(ev$start_tod[k], "%H:%M"), " - ", format(ev$end_tod[k], "%H:%M"), ")"
+              )
+              # Merge cells vertically for the span
+              span <- as.numeric(difftime(ev$end_tod[k], ev$start_tod[k], units = "mins")) / 15
+              if (span > 1) {
+                mergeCells(wb, sheet_name, cols = col_counter, rows = row_idx:(row_idx + span - 1))
+              }
+              # Apply style to ALL rows in the merged region
+              addStyle(
+                wb, sheet_name,
+                createStyle(
+                  fgFill = ev$groupColor[k],
+                  halign = "center",
+                  textDecoration = "bold",
+                  border = "TopBottomLeftRight",
+                  wrapText = TRUE
+                ),
+                rows = row_idx:(row_idx + span - 1), cols = col_counter, gridExpand = TRUE, stack = TRUE
+              )
+              # Mark covered
+              rows_to_cover <- t + seq_len(span) - 1
+              rows_to_cover <- rows_to_cover[rows_to_cover <= nrow(covered[[d]])]
+              covered[[d]][rows_to_cover, col_idx] <- TRUE
+              found <- TRUE
+              break
+            }
+          }
+          col_counter <- col_counter + 1
+        }
+      }
+      writeData(wb, sheet_name, t(row), startRow = row_idx, startCol = 1, colNames = FALSE)
+      row_idx <- row_idx + 1
+    }
+    
+    # Style header
+    addStyle(wb, sheet_name, createStyle(textDecoration = "bold", halign = "center", border = "Bottom"), rows = 1, cols = 1:(total_cols + 1), gridExpand = TRUE)
+    setColWidths(wb, sheet_name, cols = 1:(total_cols + 1), widths = 18)
+    setRowHeights(wb, sheet_name, rows = 2:(row_idx - 1), heights = 28)
+  }
 
   # ---- Student Schedules Download Handler ----
   output$download_students <- downloadHandler(
