@@ -2282,13 +2282,11 @@ server <- function(input, output, session) {
     req(data$groupInfo, data$timeBlockInfo)
     group_df <- data$groupInfo
     tb_info <- data$timeBlockInfo
-
-    # Helper: get arrival/end as fraction of day, then as time-of-day POSIXct
+  
     get_time_tod <- function(frac) {
       as.POSIXct(sprintf("%02d:%02d", floor(frac * 24), round((frac * 24 - floor(frac * 24)) * 60)), format="%H:%M", tz="UTC")
     }
-
-    # Build a data frame of group events with start/end as time-of-day and date
+  
     events <- lapply(seq_len(nrow(group_df)), function(i) {
       row <- group_df[i, ]
       tb_row <- which(tb_info$startTimeLabel == row$timeOfDay)
@@ -2307,21 +2305,16 @@ server <- function(input, output, session) {
     })
     events <- do.call(rbind, lapply(events, as.data.frame))
     if (is.null(events) || nrow(events) == 0) return(tags$div("No group events found."))
-
-    # Find unique dates and time-of-day range
+  
     all_dates <- sort(unique(events$date))
     min_tod <- min(events$start_tod)
     max_tod <- max(events$end_tod)
-
-    # Build time-of-day slots (every 15 min)
     time_seq <- seq(from = min_tod, to = max_tod, by = "15 min")
     time_labels <- format(time_seq, "%H:%M")
-
-    # For each date, find overlapping events and assign columns
+  
     date_columns <- list()
     for (d in all_dates) {
       day_events <- events[events$date == d, ]
-      # Greedy interval coloring: assign column index to each event
       cols <- rep(NA_integer_, nrow(day_events))
       col_end <- c()
       for (i in order(day_events$start_tod)) {
@@ -2342,28 +2335,27 @@ server <- function(input, output, session) {
       day_events$col <- cols
       date_columns[[d]] <- day_events
     }
-    # Find max columns needed for any date
-    max_cols <- max(sapply(date_columns, function(df) max(df$col)))
-
-    # Build table header
-    header <- tags$tr(
-      tags$th("Time"),
-      lapply(all_dates, function(d) {
-        ncol <- max(date_columns[[d]]$col)
-        lapply(seq_len(ncol), function(j) {
-          tags$th(if (ncol == 1) d else paste0(d, " (", j, ")"))
-        })
-      }) |> unlist(recursive = FALSE)
+    # Number of columns for each date
+    ncols_by_date <- sapply(date_columns, function(df) max(df$col))
+    total_cols <- sum(ncols_by_date)
+  
+    # First header row: merged date headings
+    header1 <- tags$tr(
+      tags$th(rowspan = 2, "Time"),
+      lapply(seq_along(all_dates), function(i) {
+        # Format date as "Mon July 10"
+        date_label <- format(as.Date(all_dates[i]), "%a %B %d")
+        tags$th(date_label, colspan = ncols_by_date[i], style = "text-align:center;")
+      })
     )
-
+  
     # Track for each date/column which rows are covered by a rowspan
     covered <- lapply(all_dates, function(d) {
       ncol <- max(date_columns[[d]]$col)
       matrix(FALSE, nrow = length(time_seq), ncol = ncol)
     })
     names(covered) <- all_dates
-
-    # Build table body
+  
     body_rows <- list()
     for (t in seq_along(time_seq)) {
       row_cells <- list(tags$td(time_labels[t]))
@@ -2371,17 +2363,12 @@ server <- function(input, output, session) {
         day_events <- date_columns[[d]]
         ncol <- max(day_events$col)
         for (col_idx in seq_len(ncol)) {
-          # If this row is already covered by a rowspan, skip cell
           if (covered[[d]][t, col_idx]) next
-          # Find event in this column that starts at this time-of-day
           ev <- day_events[day_events$col == col_idx, ]
           found <- FALSE
           for (k in seq_len(nrow(ev))) {
-            # Compare only time-of-day
             if (abs(as.numeric(difftime(time_seq[t], ev$start_tod[k], units = "mins"))) < 1) {
-              # Compute rowspan: how many 15-min slots does this event span?
               span <- as.numeric(difftime(ev$end_tod[k], ev$start_tod[k], units = "mins")) / 15
-              # Mark covered rows for this column (clip to table)
               rows_to_cover <- t + seq_len(span) - 1
               rows_to_cover <- rows_to_cover[rows_to_cover <= nrow(covered[[d]])]
               covered[[d]][rows_to_cover, col_idx] <- TRUE
@@ -2401,10 +2388,10 @@ server <- function(input, output, session) {
       }
       body_rows[[length(body_rows) + 1]] <- tags$tr(row_cells)
     }
-
+  
     tags$table(
       style = "border-collapse:collapse;width:100%;margin:auto;",
-      tags$thead(header),
+      tags$thead(header1),
       tags$tbody(body_rows)
     ) %>%
       tagAppendChild(
