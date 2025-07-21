@@ -2280,116 +2280,123 @@ server <- function(input, output, session) {
   
   output$event_overview_calendar <- renderUI({
     req(data$groupInfo, data$timeBlockInfo)
-    groups <- data$groupInfo
-    if (nrow(groups) == 0) return(tags$div("No group info available."))
+    groupInfo <- data$groupInfo
+    timeBlockInfo <- data$timeBlockInfo
   
-    # Get all unique dates
-    days <- sort(unique(as.Date(groups$date)))
-    if (length(days) == 0) return(tags$div("No dates found."))
-  
-    # Time grid: 15-min intervals from earliest arrival to latest leave
-    tb <- data$timeBlockInfo
-    arrs <- tb$arrivalTime * 24
-    leaves <- tb$leaveTime * 24
-    min_hour <- floor(min(arrs, na.rm=TRUE))
-    max_hour <- ceiling(max(leaves, na.rm=TRUE))
-    times <- seq(min_hour, max_hour, by=0.25) # 0.25 = 15 min
-  
-    # Helper to format time
-    fmt_time <- function(h) sprintf("%02d:%02d", floor(h), round((h-floor(h))*60))
-  
-    # Build a grid: rows = times, cols = days
-    nrow_grid <- length(times)
-    ncol_grid <- length(days)
-    grid_matrix <- vector("list", nrow_grid)
-    for (i in seq_len(nrow_grid)) {
-      grid_matrix[[i]] <- vector("list", ncol_grid)
-      for (j in seq_len(ncol_grid)) {
-        grid_matrix[[i]][[j]] <- list(
-          content = NULL,
-          rowspan = 1,
-          render = TRUE
-        )
-      }
+    # Helper: Convert Excel fraction to minutes since midnight
+    frac_to_minutes <- function(frac) {
+      if (is.na(frac) || frac == "") return(NA)
+      as.numeric(frac) * 24 * 60
     }
   
-    # For each group, fill in the grid with merged cells
-    for (g in seq_len(nrow(groups))) {
-      group_day <- as.Date(groups$date[g])
-      day_idx <- which(days == group_day)
-      st_label <- groups$timeOfDay[g]
-      tb_row <- which(tb$startTimeLabel == st_label)
-      arr <- if (length(tb_row)==1) tb$arrivalTime[tb_row]*24 else NA
-      leave <- if (length(tb_row)==1) tb$leaveTime[tb_row]*24 else NA
-      if (is.na(arr) || is.na(leave)) next
-      # Find the time indices for this group's block
-      time_idx_start <- which(abs(times - arr) < 1e-6)
-      time_idx_end <- which(abs(times - leave) < 1e-6)
-      if (length(time_idx_start) == 0 || length(time_idx_end) == 0) next
-      rowspan <- time_idx_end - time_idx_start
-      if (rowspan < 1) next
-      # Fill the merged cell at the start
-      grid_matrix[[time_idx_start]][[day_idx]] <- list(
-        content = HTML(paste(
-          input$event_nice_name,
-          paste0("Group ", groups$groupNum[g]),
-          paste0("(", fmt_time(arr), " - ", fmt_time(leave), ")"),
-          sep = "<br/>"
-        )),
-        rowspan = rowspan,
-        render = TRUE
+    # Get all group dates and time indices
+    group_blocks <- lapply(seq_len(nrow(groupInfo)), function(i) {
+      group <- groupInfo[i, ]
+      # Find timeBlockInfo row for this group
+      tb_row <- which(timeBlockInfo$startTimeLabel == group$timeOfDay)
+      if (length(tb_row) == 0) return(NULL)
+      arrival <- frac_to_minutes(timeBlockInfo$arrivalTime[tb_row])
+      leave <- frac_to_minutes(timeBlockInfo$leaveTime[tb_row])
+      list(
+        groupNum = group$groupNum,
+        date = as.Date(group$date),
+        arrival = arrival,
+        leave = leave
       )
-      # Mark the covered cells as not to render
-      if (rowspan > 1) {
-        for (k in 1:(rowspan-1)) {
-          grid_matrix[[time_idx_start + k]][[day_idx]]$render <- FALSE
-        }
+    })
+    group_blocks <- Filter(Negate(is.null), group_blocks)
+    if (length(group_blocks) == 0) return(tags$div("No group events to display."))
+  
+    # Get unique sorted dates
+    all_dates <- sort(unique(as.Date(na.omit(sapply(group_blocks, function(x) x$date)))))
+    if (length(all_dates) == 0) return(tags$div("No group events to display."))
+    date_labels <- format(all_dates, "%a<br>%b %d")
+      
+    # Get min/max time (rounded to nearest 15 min)
+    min_time <- floor(min(sapply(group_blocks, function(x) x$arrival), na.rm = TRUE) / 15) * 15
+    max_time <- ceiling(max(sapply(group_blocks, function(x) x$leave), na.rm = TRUE) / 15) * 15
+  
+    # Build time slots (every 15 min)
+    time_slots <- seq(min_time, max_time, by = 15)
+    time_labels <- sapply(time_slots, function(m) {
+      sprintf("%02d:%02d", m %/% 60, m %% 60)
+    })
+  
+    # Build a matrix: rows = time slots, cols = dates, each cell is a list of groupNums
+    cal_matrix <- matrix(vector("list", length(time_slots) * length(all_dates)),
+                         nrow = length(time_slots), ncol = length(all_dates))
+    for (g in group_blocks) {
+      col_idx <- which(all_dates == g$date)
+      if (length(col_idx) == 0) next
+      row_start <- which(time_slots >= g$arrival)[1]
+      row_end <- tail(which(time_slots < g$leave), 1)
+      if (is.na(row_start) || is.na(row_end)) next
+      for (r in row_start:row_end) {
+        cal_matrix[[r, col_idx]] <- c(cal_matrix[[r, col_idx]], g$groupNum)
       }
     }
+  
+    # Assign colors to groups (repeat if needed)
+    group_nums <- unique(sapply(group_blocks, function(x) x$groupNum))
+    color_map <- setNames(
+      rep(c("#FF7C80", "#FFA365", "#FFFF00", "#AEFF5D", "#97CBFF", "#9797FF", "#FAB3FF", "#CC66FF"), length.out = length(group_nums)),
+      group_nums
+    )
   
     # Build table rows
-    grid <- lapply(seq_len(nrow_grid), function(i) {
-      row_cells <- list(tags$td(fmt_time(times[i])))
-      for (j in seq_len(ncol_grid)) {
-        cell <- grid_matrix[[i]][[j]]
-        if (!cell$render) next
-        if (!is.null(cell$content)) {
-          row_cells <- c(row_cells, list(
-            tags$td(
-              rowspan = if (cell$rowspan > 1) cell$rowspan else NULL,
-              style = "background:#b3e6ff;font-weight:bold;vertical-align:middle;text-align:center;border:2px solid #007bff;",
-              cell$content
-            )
-          ))
+    table_rows <- lapply(seq_along(time_slots), function(i) {
+      cells <- lapply(seq_along(all_dates), function(j) {
+        groups_here <- cal_matrix[[i, j]]
+        if (length(groups_here) == 0) {
+          tags$td(style = "background:#f8f8f8;")
         } else {
-          row_cells <- c(row_cells, list(tags$td()))
+          # Stack blocks for overlapping groups
+          tags$td(
+            style = "padding:0;",
+            lapply(groups_here, function(g) {
+              tags$div(
+                style = paste0(
+                  "background:", color_map[[as.character(g)]], ";",
+                  "margin:1px 0;padding:2px 4px;border-radius:4px;font-weight:bold;font-size:90%;"
+                ),
+                paste("Group", g)
+              )
+            })
+          )
         }
-      }
-      do.call(tags$tr, row_cells)
+      })
+      tags$tr(
+        tags$td(
+          style = "font-size:90%;text-align:right;white-space:nowrap;background:#f0f0f0;",
+          time_labels[i]
+        ),
+        cells
+      )
     })
   
     # Build header
     header <- tags$tr(
       tags$th("Time"),
-      lapply(days, function(d) tags$th(format(d, "%a %b %d")))
+      lapply(date_labels, function(lbl) tags$th(HTML(lbl)))
     )
   
     tags$div(
-      id = "event_overview_calendar",
-      tags$h4("Event Overview Calendar"),
+      style = "overflow-x:auto; margin-bottom:16px;",
       tags$table(
-        style="border-collapse:collapse;width:100%;",
+        style = "border-collapse:collapse;width:100%;background:#fff;",
         tags$thead(header),
-        tags$tbody(grid)
+        tags$tbody(table_rows)
       ),
       tags$style(HTML("
         #event_overview_calendar table, #event_overview_calendar th, #event_overview_calendar td {
-          border: 1px solid #333 !important;
-          padding: 4px 8px !important;
+          border: 1px solid #bbb !important;
         }
-        #event_overview_calendar th:not(:first-child),
-        #event_overview_calendar td:not(:first-child) {
-          border-left: 4px solid #000 !important;
+        #event_overview_calendar th, #event_overview_calendar td {
+          padding: 4px 6px !important;
+          text-align: center;
+        }
+        #event_overview_calendar th {
+          background: #e9ecef;
         }
       "))
     )
