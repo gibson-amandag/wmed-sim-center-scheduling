@@ -2343,6 +2343,9 @@ server <- function(input, output, session) {
     # Number of columns for each date
     ncols_by_date <- sapply(date_columns, function(df) max(df$col))
     total_cols <- sum(ncols_by_date)
+    
+    # Calculate the starting column for each date (for thick border)
+    date_start_cols <- cumsum(c(2, head(ncols_by_date, -1)))
   
     # First header row: merged date headings
     header1 <- tags$tr(
@@ -2618,7 +2621,7 @@ server <- function(input, output, session) {
     }
   )
 
-    add_event_overview_calendar_sheet <- function(wb, sheet_name = "Event Overview Calendar", group_df, tb_info, event_nice_name = "Event") {
+  add_event_overview_calendar_sheet <- function(wb, sheet_name = "Event Overview Calendar", group_df, tb_info, event_nice_name = "Event") {
     addWorksheet(wb, sheet_name)
     
     # Helper to convert fraction to POSIXct
@@ -2651,8 +2654,17 @@ server <- function(input, output, session) {
     }
     
     all_dates <- sort(unique(events$date))
-    min_tod <- min(events$start_tod)
+    min_tod <- as.POSIXct(format(min(events$start_tod), "%Y-%m-%d %H:00:00"), tz = "UTC")
+    # Round max_tod up to the next 45-min mark (e.g., 16:45, 17:45, etc.)
     max_tod <- max(events$end_tod)
+    if (!is.na(max_tod)) {
+      mins <- as.numeric(format(max_tod, "%M"))
+      if (mins < 45) {
+      max_tod <- max_tod + (45 - mins) * 60
+      } else if (mins > 45) {
+      max_tod <- max_tod + (60 - mins + 45) * 60
+      }
+    }
     time_seq <- seq(from = min_tod, to = max_tod, by = "15 min")
     
     # Build date_columns structure (same as in Shiny)
@@ -2683,10 +2695,21 @@ server <- function(input, output, session) {
     total_cols <- sum(ncols_by_date)
     
     # Build header row
-    header <- c("Time", unlist(lapply(seq_along(all_dates), function(i) {
-      rep(format(as.Date(all_dates[i]), "%a %b %d"), ncols_by_date[i])
-    })))
+    header <- c("Time", rep("", total_cols))
     writeData(wb, sheet_name, t(header), startRow = 1, startCol = 1, colNames = FALSE)
+    # Write date headings and merge across subcolumns
+    col_counter <- 2
+    for (i in seq_along(all_dates)) {
+      date_label <- format(as.Date(all_dates[i]), "%a %b %d")
+      ncols <- ncols_by_date[i]
+      writeData(wb, sheet_name, date_label, startRow = 1, startCol = col_counter)
+      if (ncols > 1) {
+        mergeCells(wb, sheet_name, cols = col_counter:(col_counter + ncols - 1), rows = 1)
+      }
+      col_counter <- col_counter + ncols
+    }
+
+    date_start_cols <- cumsum(c(2, head(ncols_by_date, -1)))
     
     # Build body
     row_idx <- 2
@@ -2731,6 +2754,7 @@ server <- function(input, output, session) {
                 createStyle(
                   fgFill = ev$groupColor[k],
                   halign = "center",
+                  valign = "center",
                   textDecoration = "bold",
                   border = "TopBottomLeftRight",
                   wrapText = TRUE
@@ -2749,13 +2773,26 @@ server <- function(input, output, session) {
         }
       }
       writeData(wb, sheet_name, t(row), startRow = row_idx, startCol = 1, colNames = FALSE)
+
+      # Apply thick left border to all first subcolumns of each day (except the first day)
+      if (length(date_start_cols) > 1) {
+        # Add thick right border to all last subcolumns of each day (including the first)
+        for (i in seq_along(ncols_by_date)) {
+          col <- sum(ncols_by_date[seq_len(i)]) + 1
+          addStyle(
+            wb, sheet_name,
+            createStyle(border = c("right"), borderStyle = c("thick")),
+            rows = row_idx, cols = col, gridExpand = TRUE, stack = TRUE
+          )
+        }
+      }
       row_idx <- row_idx + 1
     }
     
     # Style header
     addStyle(wb, sheet_name, createStyle(textDecoration = "bold", halign = "center", border = "Bottom"), rows = 1, cols = 1:(total_cols + 1), gridExpand = TRUE)
     setColWidths(wb, sheet_name, cols = 1:(total_cols + 1), widths = 18)
-    setRowHeights(wb, sheet_name, rows = 2:(row_idx - 1), heights = 28)
+    setRowHeights(wb, sheet_name, rows = 2:(row_idx - 1), heights = 16)
   }
 
   # ---- Student Schedules Download Handler ----
