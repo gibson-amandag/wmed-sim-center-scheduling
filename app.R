@@ -2660,9 +2660,9 @@ server <- function(input, output, session) {
     if (!is.na(max_tod)) {
       mins <- as.numeric(format(max_tod, "%M"))
       if (mins < 45) {
-      max_tod <- max_tod + (45 - mins) * 60
+        max_tod <- max_tod + (45 - mins) * 60
       } else if (mins > 45) {
-      max_tod <- max_tod + (60 - mins + 45) * 60
+        max_tod <- max_tod + (60 - mins + 45) * 60
       }
     }
     time_seq <- seq(from = min_tod, to = max_tod, by = "15 min")
@@ -2694,25 +2694,73 @@ server <- function(input, output, session) {
     ncols_by_date <- sapply(date_columns, function(df) max(df$col))
     total_cols <- sum(ncols_by_date)
     
-    # Build header row
+    # --- 1. Merged title row ---
+    writeData(wb, sheet_name, event_nice_name, startRow = 1, startCol = 1)
+    mergeCells(wb, sheet_name, cols = 1:(total_cols + 1), rows = 1)
+    addStyle(
+      wb, sheet_name,
+      createStyle(textDecoration = "bold", fontSize = 16, halign = "center"),
+      rows = 1, cols = 1:(total_cols + 1), gridExpand = TRUE, stack = TRUE
+    )
+    
+    # --- 2. Date range row ---
+    date_range <- if (length(all_dates) == 1) {
+      format(as.Date(all_dates[1]), "%B %d, %Y")
+    } else {
+      # If same year, show "March 10 - 14, 2025", else "March 30, 2025 - April 2, 2026"
+      y1 <- format(as.Date(all_dates[1]), "%Y")
+      y2 <- format(as.Date(all_dates[length(all_dates)]), "%Y")
+      if (y1 == y2) {
+        paste0(
+          format(as.Date(all_dates[1]), "%B %d"),
+          " - ",
+          format(as.Date(all_dates[length(all_dates)]), "%d, %Y")
+        )
+      } else {
+        paste0(
+          format(as.Date(all_dates[1]), "%B %d, %Y"),
+          " - ",
+          format(as.Date(all_dates[length(all_dates)]), "%B %d, %Y")
+        )
+      }
+    }
+    writeData(wb, sheet_name, date_range, startRow = 2, startCol = 1)
+    mergeCells(wb, sheet_name, cols = 1:(total_cols + 1), rows = 2)
+    addStyle(
+      wb, sheet_name,
+      createStyle(textDecoration = "bold", fontSize = 12, halign = "center"),
+      rows = 2, cols = 1:(total_cols + 1), gridExpand = TRUE, stack = TRUE
+    )
+    
+    # --- 3. Faculty contact row ---
+    faculty_contact <- "Faculty Contact: ____________________________"
+    writeData(wb, sheet_name, faculty_contact, startRow = 3, startCol = 1)
+    mergeCells(wb, sheet_name, cols = 1:(total_cols + 1), rows = 3)
+    addStyle(
+      wb, sheet_name,
+      createStyle(fontSize = 11, halign = "center"),
+      rows = 3, cols = 1:(total_cols + 1), gridExpand = TRUE, stack = TRUE
+    )
+    
+    # --- 4. Header row (dates) ---
     header <- c("Time", rep("", total_cols))
-    writeData(wb, sheet_name, t(header), startRow = 1, startCol = 1, colNames = FALSE)
+    writeData(wb, sheet_name, t(header), startRow = 4, startCol = 1, colNames = FALSE)
     # Write date headings and merge across subcolumns
     col_counter <- 2
     for (i in seq_along(all_dates)) {
       date_label <- format(as.Date(all_dates[i]), "%a %b %d")
       ncols <- ncols_by_date[i]
-      writeData(wb, sheet_name, date_label, startRow = 1, startCol = col_counter)
+      writeData(wb, sheet_name, date_label, startRow = 4, startCol = col_counter)
       if (ncols > 1) {
-        mergeCells(wb, sheet_name, cols = col_counter:(col_counter + ncols - 1), rows = 1)
+        mergeCells(wb, sheet_name, cols = col_counter:(col_counter + ncols - 1), rows = 4)
       }
       col_counter <- col_counter + ncols
     }
-
+    
     date_start_cols <- cumsum(c(2, head(ncols_by_date, -1)))
     
-    # Build body
-    row_idx <- 2
+    # --- 5. Body rows ---
+    row_idx <- 5
     covered <- lapply(all_dates, function(d) {
       ncol <- max(date_columns[[d]]$col)
       matrix(FALSE, nrow = length(time_seq), ncol = ncol)
@@ -2737,18 +2785,15 @@ server <- function(input, output, session) {
           found <- FALSE
           for (k in seq_len(nrow(ev))) {
             if (abs(as.numeric(difftime(time_seq[t], ev$start_tod[k], units = "mins"))) < 1) {
-              # Write event info
               row[col_counter] <- paste0(
                 event_nice_name, "\n",
                 "Group ", ev$groupNum[k], "\n",
                 "(", format(ev$start_tod[k], "%H:%M"), " - ", format(ev$end_tod[k], "%H:%M"), ")"
               )
-              # Merge cells vertically for the span
               span <- as.numeric(difftime(ev$end_tod[k], ev$start_tod[k], units = "mins")) / 15
               if (span > 1) {
                 mergeCells(wb, sheet_name, cols = col_counter, rows = row_idx:(row_idx + span - 1))
               }
-              # Apply style to ALL rows in the merged region
               addStyle(
                 wb, sheet_name,
                 createStyle(
@@ -2761,7 +2806,6 @@ server <- function(input, output, session) {
                 ),
                 rows = row_idx:(row_idx + span - 1), cols = col_counter, gridExpand = TRUE, stack = TRUE
               )
-              # Mark covered
               rows_to_cover <- t + seq_len(span) - 1
               rows_to_cover <- rows_to_cover[rows_to_cover <= nrow(covered[[d]])]
               covered[[d]][rows_to_cover, col_idx] <- TRUE
@@ -2790,9 +2834,9 @@ server <- function(input, output, session) {
     }
     
     # Style header
-    addStyle(wb, sheet_name, createStyle(textDecoration = "bold", halign = "center", border = "Bottom"), rows = 1, cols = 1:(total_cols + 1), gridExpand = TRUE)
+    addStyle(wb, sheet_name, createStyle(textDecoration = "bold", halign = "center", border = "Bottom"), rows = 4, cols = 1:(total_cols + 1), gridExpand = TRUE)
     setColWidths(wb, sheet_name, cols = 1:(total_cols + 1), widths = 18)
-    setRowHeights(wb, sheet_name, rows = 2:(row_idx - 1), heights = 16)
+    setRowHeights(wb, sheet_name, rows = 5:(row_idx - 1), heights = 16)
   }
 
   # ---- Student Schedules Download Handler ----
