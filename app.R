@@ -570,7 +570,8 @@ server <- function(input, output, session) {
           date = if (!is.null(date)) date else NULL,
           startTime = if (!is.null(startTime)) startTime else "",
           endTime = if (!is.null(endTime)) endTime else "",
-          timeOfDay = if (!is.null(timeOfDay)) timeOfDay else NA
+          timeOfDay = if (!is.null(timeOfDay)) timeOfDay else NA,
+          groupColor = if (!is.null(input[[paste0(prefix, "groupColor")]])) input[[paste0(prefix, "groupColor")]] else "#e0f7fa"
         )
       }
       # Remove extra if n decreased
@@ -818,9 +819,10 @@ server <- function(input, output, session) {
           #   str(get_start_time_label(timeOfDay_val, start_time_names))
           # )
           fluidRow(
-            column(4, textInput(paste0(prefix, "groupNum"), paste0("Group ", i, " Name"), value = groupNum_val)),
-            column(4, dateInput(paste0(prefix, "date"), "Date", value = if (!is.null(date_val)) date_val else NULL)),
-            column(4, selectInput(paste0(prefix, "timeOfDay"), "Time of Day", choices = time_of_day_choices, selected = timeOfDay_val))
+            column(3, textInput(paste0(prefix, "groupNum"), paste0("Group ", i, " Name"), value = groupNum_val)),
+            column(3, dateInput(paste0(prefix, "date"), "Date", value = if (!is.null(date_val)) date_val else NULL)),
+            column(3, selectInput(paste0(prefix, "timeOfDay"), "Time of Day", choices = time_of_day_choices, selected = timeOfDay_val)),
+            column(3, colourpicker::colourInput(paste0(prefix, "groupColor"), "Group Color", value = "#e0f7fa"))
           )
         })
       )
@@ -1516,6 +1518,9 @@ server <- function(input, output, session) {
       updateDateInput(session, paste0("tmpl_group_", i, "_date"), value = groupInfo$date[i])
       if (length(timeOfDay_idx) == 1) {
         updateSelectInput(session, paste0("tmpl_group_", i, "_timeOfDay"), selected = as.character(timeOfDay_idx))
+      }
+      if ("groupColor" %in% names(groupInfo)) {
+        colourpicker::updateColourInput(session, paste0("tmpl_group_", i, "_groupColor"), value = groupInfo$groupColor[i])
       }
     }
   }
@@ -2358,7 +2363,9 @@ server <- function(input, output, session) {
   
     body_rows <- list()
     for (t in seq_along(time_seq)) {
-      row_cells <- list(tags$td(time_labels[t]))
+      # Always show the first block's time label, and every hour
+      hour_label <- if (t == 1 || format(time_seq[t], "%M") == "00") format(time_seq[t], "%H:%M") else ""
+      row_cells <- list(tags$td(hour_label))
       col_counter <- 1
       for (d_idx in seq_along(all_dates)) {
         d <- all_dates[d_idx]
@@ -2376,11 +2383,22 @@ server <- function(input, output, session) {
               covered[[d]][rows_to_cover, col_idx] <- TRUE
               # Add thick border class if this is the first col of a day (but not the first day)
               td_class <- if (col_idx == 1 && d_idx > 1) "thick-border-left" else NULL
+              group_color <- if ("groupColor" %in% names(group_df)) {
+                group_df$groupColor[group_df$groupNum == ev$groupNum[k]][1]
+              } else {
+                "#e0f7fa" # fallback color
+              }
               row_cells[[length(row_cells) + 1]] <- tags$td(
-                paste0("Group ", ev$groupNum[k]),
-                style = "background:#e0f7fa;font-weight:bold;text-align:center;",
+                tags$div(
+                  tags$b(input$event_nice_name),
+                  tags$br(),
+                  paste0("Group ", ev$groupNum[k]),
+                  tags$br(),
+                  paste0("(", format(ev$start_tod[k], "%H:%M"), " - ", format(ev$end_tod[k], "%H:%M"), ")")
+                ),
+                style = paste0("background:", group_color, ";font-weight:bold;text-align:center;"),
                 rowspan = span,
-                class = td_class
+                class = paste("event-block", td_class)
               )
               found <- TRUE
               break
@@ -2417,6 +2435,11 @@ server <- function(input, output, session) {
           }
           .thick-border-left {
             border-left: 4px solid #333 !important;
+          }
+          /* Standardize row height for the Time column */
+          table tr td:first-child {
+            min-height: 28px;
+            height: 28px;
           }
         "))
       )
@@ -2900,6 +2923,7 @@ server <- function(input, output, session) {
       groupNum = character(num_groups),
       date = as.Date(rep(NA, num_groups)),
       timeOfDay = character(num_groups),
+      groupColor = character(num_groups),
       stringsAsFactors = FALSE
     )
     for (i in seq_len(num_groups)) {
@@ -2910,6 +2934,11 @@ server <- function(input, output, session) {
         get_start_time_label(group$timeOfDay, start_time_names)
       } else {
         get_start_time_label(i, start_time_names)
+      }
+      groupInfo$groupColor[i] <- if (!is.null(group) && !is.null(group$groupColor)) {
+        group$groupColor
+      } else {
+        "#e0f7fa"
       }
     }
 
