@@ -2277,129 +2277,152 @@ server <- function(input, output, session) {
   })
 
   # Event Calendar Overview ---------------
-  
+
   output$event_overview_calendar <- renderUI({
     req(data$groupInfo, data$timeBlockInfo)
-    groupInfo <- data$groupInfo
-    timeBlockInfo <- data$timeBlockInfo
-  
-    # Helper: Convert Excel fraction to minutes since midnight
-    frac_to_minutes <- function(frac) {
-      if (is.na(frac) || frac == "") return(NA)
-      as.numeric(frac) * 24 * 60
+    group_df <- data$groupInfo
+    tb_info <- data$timeBlockInfo
+
+    # Helper: get arrival/end as fraction of day, then as time-of-day POSIXct
+    get_time_tod <- function(frac) {
+      as.POSIXct(sprintf("%02d:%02d", floor(frac * 24), round((frac * 24 - floor(frac * 24)) * 60)), format="%H:%M", tz="UTC")
     }
-  
-    # Get all group dates and time indices
-    group_blocks <- lapply(seq_len(nrow(groupInfo)), function(i) {
-      group <- groupInfo[i, ]
-      # Find timeBlockInfo row for this group
-      tb_row <- which(timeBlockInfo$startTimeLabel == group$timeOfDay)
-      if (length(tb_row) == 0) return(NULL)
-      arrival <- frac_to_minutes(timeBlockInfo$arrivalTime[tb_row])
-      leave <- frac_to_minutes(timeBlockInfo$leaveTime[tb_row])
-      list(
-        groupNum = group$groupNum,
-        date = as.Date(group$date),
-        arrival = arrival,
-        leave = leave
-      )
-    })
-    group_blocks <- Filter(Negate(is.null), group_blocks)
-    if (length(group_blocks) == 0) return(tags$div("No group events to display."))
-  
-    # Get unique sorted dates
-    all_dates <- sort(unique(as.Date(na.omit(sapply(group_blocks, function(x) x$date)))))
-    if (length(all_dates) == 0) return(tags$div("No group events to display."))
-    date_labels <- format(all_dates, "%a<br>%b %d")
-      
-    # Get min/max time (rounded to nearest 15 min)
-    min_time <- floor(min(sapply(group_blocks, function(x) x$arrival), na.rm = TRUE) / 15) * 15
-    max_time <- ceiling(max(sapply(group_blocks, function(x) x$leave), na.rm = TRUE) / 15) * 15
-  
-    # Build time slots (every 15 min)
-    time_slots <- seq(min_time, max_time, by = 15)
-    time_labels <- sapply(time_slots, function(m) {
-      sprintf("%02d:%02d", m %/% 60, m %% 60)
-    })
-  
-    # Build a matrix: rows = time slots, cols = dates, each cell is a list of groupNums
-    cal_matrix <- matrix(vector("list", length(time_slots) * length(all_dates)),
-                         nrow = length(time_slots), ncol = length(all_dates))
-    for (g in group_blocks) {
-      col_idx <- which(all_dates == g$date)
-      if (length(col_idx) == 0) next
-      row_start <- which(time_slots >= g$arrival)[1]
-      row_end <- tail(which(time_slots < g$leave), 1)
-      if (is.na(row_start) || is.na(row_end)) next
-      for (r in row_start:row_end) {
-        cal_matrix[[r, col_idx]] <- c(cal_matrix[[r, col_idx]], g$groupNum)
+
+    # Build a data frame of group events with start/end as time-of-day and date
+    events <- lapply(seq_len(nrow(group_df)), function(i) {
+      row <- group_df[i, ]
+      tb_row <- which(tb_info$startTimeLabel == row$timeOfDay)
+      if (length(tb_row) == 1) {
+        arrival <- tb_info$arrivalTime[tb_row]
+        leave <- tb_info$leaveTime[tb_row]
+        list(
+          groupNum = row$groupNum,
+          date = as.character(row$date),
+          start_tod = get_time_tod(arrival),
+          end_tod = get_time_tod(leave)
+        )
+      } else {
+        NULL
       }
-    }
-  
-    # Assign colors to groups (repeat if needed)
-    group_nums <- unique(sapply(group_blocks, function(x) x$groupNum))
-    color_map <- setNames(
-      rep(c("#FF7C80", "#FFA365", "#FFFF00", "#AEFF5D", "#97CBFF", "#9797FF", "#FAB3FF", "#CC66FF"), length.out = length(group_nums)),
-      group_nums
-    )
-  
-    # Build table rows
-    table_rows <- lapply(seq_along(time_slots), function(i) {
-      cells <- lapply(seq_along(all_dates), function(j) {
-        groups_here <- cal_matrix[[i, j]]
-        if (length(groups_here) == 0) {
-          tags$td(style = "background:#f8f8f8;")
-        } else {
-          # Stack blocks for overlapping groups
-          tags$td(
-            style = "padding:0;",
-            lapply(groups_here, function(g) {
-              tags$div(
-                style = paste0(
-                  "background:", color_map[[as.character(g)]], ";",
-                  "margin:1px 0;padding:2px 4px;border-radius:4px;font-weight:bold;font-size:90%;"
-                ),
-                paste("Group", g)
-              )
-            })
-          )
-        }
-      })
-      tags$tr(
-        tags$td(
-          style = "font-size:90%;text-align:right;white-space:nowrap;background:#f0f0f0;",
-          time_labels[i]
-        ),
-        cells
-      )
     })
-  
-    # Build header
+    events <- do.call(rbind, lapply(events, as.data.frame))
+    if (is.null(events) || nrow(events) == 0) return(tags$div("No group events found."))
+
+    # Find unique dates and time-of-day range
+    all_dates <- sort(unique(events$date))
+    min_tod <- min(events$start_tod)
+    max_tod <- max(events$end_tod)
+
+    # Build time-of-day slots (every 15 min)
+    time_seq <- seq(from = min_tod, to = max_tod, by = "15 min")
+    time_labels <- format(time_seq, "%H:%M")
+
+    # For each date, find overlapping events and assign columns
+    date_columns <- list()
+    for (d in all_dates) {
+      day_events <- events[events$date == d, ]
+      # Greedy interval coloring: assign column index to each event
+      cols <- rep(NA_integer_, nrow(day_events))
+      col_end <- c()
+      for (i in order(day_events$start_tod)) {
+        assigned <- FALSE
+        for (j in seq_along(col_end)) {
+          if (day_events$start_tod[i] >= col_end[j]) {
+            cols[i] <- j
+            col_end[j] <- day_events$end_tod[i]
+            assigned <- TRUE
+            break
+          }
+        }
+        if (!assigned) {
+          cols[i] <- length(col_end) + 1
+          col_end <- c(col_end, day_events$end_tod[i])
+        }
+      }
+      day_events$col <- cols
+      date_columns[[d]] <- day_events
+    }
+    # Find max columns needed for any date
+    max_cols <- max(sapply(date_columns, function(df) max(df$col)))
+
+    # Build table header
     header <- tags$tr(
       tags$th("Time"),
-      lapply(date_labels, function(lbl) tags$th(HTML(lbl)))
+      lapply(all_dates, function(d) {
+        ncol <- max(date_columns[[d]]$col)
+        lapply(seq_len(ncol), function(j) {
+          tags$th(if (ncol == 1) d else paste0(d, " (", j, ")"))
+        })
+      }) |> unlist(recursive = FALSE)
     )
-  
-    tags$div(
-      style = "overflow-x:auto; margin-bottom:16px;",
-      tags$table(
-        style = "border-collapse:collapse;width:100%;background:#fff;",
-        tags$thead(header),
-        tags$tbody(table_rows)
-      ),
-      tags$style(HTML("
-        #event_overview_calendar table, #event_overview_calendar th, #event_overview_calendar td {
-          border: 1px solid #bbb !important;
+
+    # Track for each date/column which rows are covered by a rowspan
+    covered <- lapply(all_dates, function(d) {
+      ncol <- max(date_columns[[d]]$col)
+      matrix(FALSE, nrow = length(time_seq), ncol = ncol)
+    })
+    names(covered) <- all_dates
+
+    # Build table body
+    body_rows <- list()
+    for (t in seq_along(time_seq)) {
+      row_cells <- list(tags$td(time_labels[t]))
+      for (d in all_dates) {
+        day_events <- date_columns[[d]]
+        ncol <- max(day_events$col)
+        for (col_idx in seq_len(ncol)) {
+          # If this row is already covered by a rowspan, skip cell
+          if (covered[[d]][t, col_idx]) next
+          # Find event in this column that starts at this time-of-day
+          ev <- day_events[day_events$col == col_idx, ]
+          found <- FALSE
+          for (k in seq_len(nrow(ev))) {
+            # Compare only time-of-day
+            if (abs(as.numeric(difftime(time_seq[t], ev$start_tod[k], units = "mins"))) < 1) {
+              # Compute rowspan: how many 15-min slots does this event span?
+              span <- as.numeric(difftime(ev$end_tod[k], ev$start_tod[k], units = "mins")) / 15
+              # Mark covered rows for this column (clip to table)
+              rows_to_cover <- t + seq_len(span) - 1
+              rows_to_cover <- rows_to_cover[rows_to_cover <= nrow(covered[[d]])]
+              covered[[d]][rows_to_cover, col_idx] <- TRUE
+              row_cells[[length(row_cells) + 1]] <- tags$td(
+                paste0("Group ", ev$groupNum[k]),
+                style = "background:#e0f7fa;font-weight:bold;text-align:center;",
+                rowspan = span
+              )
+              found <- TRUE
+              break
+            }
+          }
+          if (!found) {
+            row_cells[[length(row_cells) + 1]] <- tags$td("")
+          }
         }
-        #event_overview_calendar th, #event_overview_calendar td {
-          padding: 4px 6px !important;
-          text-align: center;
-        }
-        #event_overview_calendar th {
-          background: #e9ecef;
-        }
-      "))
-    )
+      }
+      body_rows[[length(body_rows) + 1]] <- tags$tr(row_cells)
+    }
+
+    tags$table(
+      style = "border-collapse:collapse;width:100%;margin:auto;",
+      tags$thead(header),
+      tags$tbody(body_rows)
+    ) %>%
+      tagAppendChild(
+        tags$style(HTML("
+          table tr th, table tr td {
+            border: 1px solid #333 !important;
+            padding: 4px 8px !important;
+          }
+          table tr th {
+            background: #f8f9fa;
+            font-weight: bold;
+            text-align: center;
+          }
+          table tr td {
+            text-align: center;
+          }
+        "))
+      )
   })
 
 
