@@ -1646,7 +1646,15 @@ server <- function(input, output, session) {
       for (j in seq_len(n_blocks)) {
         inputId <- paste0("sched_", i, "_", j)
         val <- schedule[[timeblock_cols[j]]][i]
-        updateSelectInput(session, inputId, selected = if (!is.null(val)) as.character(val) else "")
+        # Split by comma for multiple students, trim whitespace, and remove blanks
+        selected <- if (!is.null(val) && val != "") {
+          vals <- unlist(strsplit(as.character(val), ","))
+          vals <- trimws(vals)
+          vals[vals != ""]
+        } else {
+          ""
+        }
+        updateSelectInput(session, inputId, selected = selected)
       }
     }
   }
@@ -2232,7 +2240,7 @@ server <- function(input, output, session) {
     room2 <- station_wide$room2
     notes <- station_wide$notes
     duration <- station_wide$timeInMin
-
+  
     faculty_by_student <- sched$faculty_by_student
     roomFaculty <- if (!faculty_by_student) station_wide$faculty else NULL
     timeblock_times <- sched$timeblock_times
@@ -2241,63 +2249,73 @@ server <- function(input, output, session) {
     long_sched <- sched$long %>%
       filter(shortKey == !!stationKey, groupNum == !!groupNum) %>%
       arrange(timeBlock)
+  
     if (nrow(long_sched) == 0) return(tags$div("No schedule found for this station"))
   
-    # Prepare merged rows
-    n <- nrow(long_sched)
+    # Group by timeBlock, collect all students in each block
+    block_df <- long_sched %>%
+      group_by(timeBlock) %>%
+      summarise(
+        studentNums = list(sort(unique(studentNum[!is.na(studentNum)]))),
+        studentLabels = list(studentLabel[!is.na(studentLabel) & studentLabel != ""]),
+        faculties = list(faculty[!is.na(faculty) & faculty != ""]),
+        .groups = "drop"
+      )
+  
+    # For each block, create a merge key (sorted studentNums as string)
+    block_df$merge_key <- sapply(block_df$studentNums, function(x) paste(sort(x), collapse = ","))
+  
+    # Now merge consecutive blocks with the same merge_key
     rows <- list()
+    n <- nrow(block_df)
     i <- 1
     while (i <= n) {
-      row <- long_sched[i, ]
-      # Find how many subsequent rows have the same studentLabel
-      rowspan <- 1
-      while (
-        i + rowspan <= n &&
-        !is.na(long_sched$studentLabel[i]) &&
-        !is.na(long_sched$studentLabel[i + rowspan]) &&
-        long_sched$studentLabel[i] == long_sched$studentLabel[i + rowspan]
-      ) {
-        rowspan <- rowspan + 1
+      merge_key <- block_df$merge_key[i]
+      span <- 1
+      while (i + span <= n && block_df$merge_key[i + span] == merge_key) {
+        span <- span + 1
       }
-      # Build rows for this group
-      for (j in 0:(rowspan - 1)) {
-        idx <- i + j
-        this_row <- long_sched[idx, ]
-        tb_time <- if (!is.null(timeblock_times[[this_row$timeBlock]])) timeblock_times[[this_row$timeBlock]] else this_row$timeBlock
-        # Only add the merged cell for the first row in the group
-        if (j == 0) {
-          station_info <- tags$div(
-            if (!is.null(this_row$studentLabel) && !is.na(this_row$studentLabel) && this_row$studentLabel != "") {
-              paste0("Student: ", this_row$studentLabel)
-            } else {
-              "Break"
-            },
-            if (faculty_by_student && !is.null(this_row$faculty) && !is.na(this_row$faculty) && this_row$faculty != "") {
-              list(tags$br(), paste0("Faculty: ", this_row$faculty))
-            }
-          )
-          studentNum <- if (!is.null(this_row$studentNum) && !is.na(this_row$studentNum)) this_row$studentNum else NA
-          student_color <- NULL
-          if (!is.na(studentNum) && studentNum %in% data$fillColor$studentNum) {
-            student_color <- data$fillColor$code[data$fillColor$studentNum == studentNum]
-          }
-          station_style <- if (!is.null(student_color) && student_color != "") {
-            paste0("background-color:", student_color, ";")
-          } else {
-            ""
-          }
-          rows[[length(rows) + 1]] <- tags$tr(
-            tags$td(tb_time),
-            tags$td(station_info, style = station_style, rowspan = rowspan)
-          )
-        } else {
-          # For subsequent rows, just add the time cell and skip the merged cell
-          rows[[length(rows) + 1]] <- tags$tr(
-            tags$td(tb_time)
-          )
-        }
+      # Compose student info
+      studentLabels <- unique(unlist(block_df$studentLabels[i]))
+      faculties <- unique(unlist(block_df$faculties[i]))
+      if (length(studentLabels) > 0) {
+        student_info <- paste0("Student: ", paste(studentLabels, collapse = "; "))
+      } else {
+        student_info <- "Break"
       }
-      i <- i + rowspan
+      if (faculty_by_student && length(faculties) > 0) {
+        student_info <- tagList(student_info, tags$br(), paste0("Faculty: ", paste(faculties, collapse = "; ")))
+      }
+      # Color: use first studentNum if present
+      studentNum <- if (length(block_df$studentNums[[i]]) > 0) block_df$studentNums[[i]][1] else NA
+      student_color <- if (!is.na(studentNum) && studentNum %in% data$fillColor$studentNum) {
+        data$fillColor$code[data$fillColor$studentNum == studentNum]
+      } else {
+        NULL
+      }
+      station_style <- if (!is.null(student_color) && student_color != "") {
+        paste0("background-color:", student_color, ";")
+      } else {
+        ""
+      }
+      # Time label: merge all block times
+      tb_times <- sapply(i:(i + span - 1), function(idx) {
+        tb <- block_df$timeBlock[idx]
+        if (!is.null(timeblock_times[[tb]])) timeblock_times[[tb]] else tb
+      })
+      time_label <- if (length(tb_times) == 1) tb_times else tagList(
+        unlist(
+          lapply(seq_along(tb_times), function(i) {
+            if (i < length(tb_times)) list(tb_times[i], tags$br()) else tb_times[i]
+          }),
+          recursive = FALSE
+        )
+      )
+      rows[[length(rows) + 1]] <- tags$tr(
+        tags$td(time_label, rowspan = 1),
+        tags$td(student_info, style = station_style, rowspan = 1)
+      )
+      i <- i + span
     }
   
     header <- tags$tr(
