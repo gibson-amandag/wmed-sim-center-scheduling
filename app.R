@@ -1857,8 +1857,15 @@ server <- function(input, output, session) {
   })
 
   output$scheduleTabs <- renderUI({
-    req(data$schedules)
-    tabs <- lapply(names(data$schedules), function(name) {
+    req(data$schedules, data$groupInfo)
+    # Use group order from groupInfo if available
+    if (!is.null(data$groupInfo) && "groupNum" %in% names(data$groupInfo)) {
+      sched_names <- paste0("Group_", as.character(data$groupInfo$groupNum))
+      sched_names <- sched_names[sched_names %in% names(data$schedules)]
+    } else {
+      sched_names <- names(data$schedules)
+    }
+    tabs <- lapply(sched_names, function(name) {
       # Remove "Group_" prefix and underscore for display
       display_name <- sub("^Group_+", "Group ", name)
       tabPanel(display_name, uiOutput(paste0("sched_", name)))
@@ -1867,8 +1874,15 @@ server <- function(input, output, session) {
   })
 
   observe({
-    req(data$schedules, data$fillColor)
-    lapply(names(data$schedules), function(name) {
+    req(data$schedules, data$fillColor, data$groupInfo)
+    # Use group order from groupInfo if available
+    if (!is.null(data$groupInfo) && "groupNum" %in% names(data$groupInfo)) {
+      sched_names <- paste0("Group_", as.character(data$groupInfo$groupNum))
+      sched_names <- sched_names[sched_names %in% names(data$schedules)]
+    } else {
+      sched_names <- names(data$schedules)
+    }
+    lapply(sched_names, function(name) {
       output[[paste0("sched_", name)]] <- renderUI({
         scheds <- data$schedules[[name]]
         wide_sched <- scheds$wide
@@ -2576,7 +2590,13 @@ server <- function(input, output, session) {
   )
 
   write_group_schedules_to_workbook <- function(wb, schedules, fillColor, n_steps, progress_offset = 6) {
-    sched_names <- names(schedules)
+    # Use group order from groupInfo, fallback to names(schedules) if missing
+    if (!is.null(data$groupInfo) && "groupNum" %in% names(data$groupInfo)) {
+      sched_names <- paste0("Group_", as.character(data$groupInfo$groupNum))
+      sched_names <- sched_names[sched_names %in% names(schedules)]
+    } else {
+      sched_names <- names(schedules)
+    }
     for (idx in seq_along(sched_names)) {
       name <- sched_names[idx]
       sched <- schedules[[name]]
@@ -2660,28 +2680,27 @@ server <- function(input, output, session) {
         }
       }
   
-      # Optionally, add color formatting for student cells
+      # Only color if there is a student name (". " in the value)
       for (col in seq_along(timeblock_cols)) {
         tb <- timeblock_cols[col]
         for (i in seq_len(nrow(sched$wide))) {
           val <- sched$wide[[tb]][i]
           studentNum <- NA
-          if (!is.na(val) && val != "") {
+          color <- NULL
+          if (!is.na(val) && val != "" && grepl("\\. ", val)) {
             matches <- regmatches(val, regexpr("^[0-9]+", val))
             if (length(matches) > 0 && matches != "") {
               studentNum <- as.integer(matches)
+              if (!is.na(studentNum) && studentNum %in% fillColor$studentNum) {
+                color <- fillColor$code[fillColor$studentNum == studentNum]
+              }
             }
           }
-          color <- NULL
-          if (!is.na(studentNum) && studentNum %in% fillColor$studentNum) {
-            color <- fillColor$code[fillColor$studentNum == studentNum]
-          } else if (is.na(val) || val == "") {
-            color <- "#717171"
-          }
+          # Do not color if no student name (no ". " in val)
           if (!is.null(color)) {
             addStyle(
               wb, ws_name,
-              createStyle(fgFill = color, halign = "center", textDecoration = NULL, fontColour = ifelse(color == "#717171", "#FFFFFF", "#000000")),
+              createStyle(fgFill = color, halign = "center", textDecoration = NULL, fontColour = "#000000"),
               rows = i + 3, cols = col + 1, gridExpand = TRUE, stack = TRUE
             )
           }
@@ -2693,7 +2712,7 @@ server <- function(input, output, session) {
     }
   }
 
-  add_event_overview_calendar_sheet <- function(wb, sheet_name = "Event Overview Calendar", group_df, tb_info, event_nice_name = "Event") {
+  add_event_overview_calendar_sheet <- function(wb, sheet_name = "Event overview calendar", group_df, tb_info, event_nice_name = "Event") {
     addWorksheet(wb, sheet_name)
     
     # Helper to convert fraction to POSIXct
