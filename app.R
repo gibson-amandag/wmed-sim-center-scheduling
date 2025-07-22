@@ -1646,8 +1646,8 @@ server <- function(input, output, session) {
       for (j in seq_len(n_blocks)) {
         inputId <- paste0("sched_", i, "_", j)
         val <- schedule[[timeblock_cols[j]]][i]
-        # Split by comma for multiple students, trim whitespace, and remove blanks
-        selected <- if (!is.null(val) && val != "") {
+        # Fix: handle NA explicitly
+        selected <- if (!is.null(val) && !is.na(val) && val != "") {
           vals <- unlist(strsplit(as.character(val), ","))
           vals <- trimws(vals)
           vals[vals != ""]
