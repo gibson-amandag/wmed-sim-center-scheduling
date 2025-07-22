@@ -1748,7 +1748,7 @@ server <- function(input, output, session) {
     req(data$schedule, data$fillColor)
     sched <- data$schedule
     fill <- data$fillColor
-
+  
     # Identify time block columns
     timeblock_cols <- grep("^TimeBlock", names(sched), value = TRUE)
     # Build table header
@@ -1756,8 +1756,8 @@ server <- function(input, output, session) {
       tags$th("Station"),
       lapply(timeblock_cols, tags$th)
     )
-
-    # Build table rows with merged cells for consecutive studentNum
+  
+    # Build table rows with merged cells for consecutive identical studentNum sets
     rows <- lapply(seq_len(nrow(sched)), function(i) {
       row <- sched[i, ]
       # Compose station info for the first column
@@ -1786,7 +1786,7 @@ server <- function(input, output, session) {
         ""
       }
       cells <- list(tags$td(station_info, style = station_style))
-      prev_studentNum <- NULL
+      prev_sn_vec_sorted <- NULL
       prev_label <- NULL
       prev_color <- NULL
       prev_textColor <- NULL
@@ -1795,36 +1795,32 @@ server <- function(input, output, session) {
       for (j in seq_along(timeblock_cols)) {
         tb <- timeblock_cols[j]
         val <- row[[tb]]
-        # Handle multiple students: use first for color, show all for label
-        studentNum <- NA
-        cell_label <- val
+        # Parse and sort studentNum list for merging
+        sn_vec <- unlist(strsplit(as.character(val), ","))
+        sn_vec <- trimws(sn_vec)
+        sn_vec <- sn_vec[sn_vec != ""]
+        sn_vec_sorted <- sort(sn_vec)
+        # Use for coloring (first student), but merge logic uses full sorted list
+        studentNum <- if (length(sn_vec_sorted) > 0) suppressWarnings(as.integer(sn_vec_sorted[1])) else NA
+        cell_label <- if (is.na(val) || val == "") "Break" else val
         if (is.na(val) || val == "") {
-          cell_label <- "Break"
           color <- "#717171"
           textColor <- "white"
+        } else if (!is.na(studentNum) && studentNum %in% fill$studentNum) {
+          color <- fill$code[fill$studentNum == studentNum]
+          textColor <- NULL
         } else {
-          sn_vec <- unlist(strsplit(as.character(val), ","))
-          sn_vec <- trimws(sn_vec)
-          if (length(sn_vec) > 0 && sn_vec[1] != "" && !is.na(sn_vec[1])) {
-            studentNum <- suppressWarnings(as.integer(sn_vec[1]))
-          }
-          # Only color if studentNum is valid
-          if (!is.na(studentNum) && studentNum %in% fill$studentNum) {
-            color <- fill$code[fill$studentNum == studentNum]
-            textColor <- NULL
-          } else {
-            color <- "#FFFFFF"
-            textColor <- NULL
-          }
+          color <- "#FFFFFF"
+          textColor <- NULL
         }
-        # Merge logic
+        # Merge logic: compare full sorted studentNum list
         if (j == 1) {
-          prev_studentNum <- studentNum
+          prev_sn_vec_sorted <- sn_vec_sorted
           prev_label <- cell_label
           prev_color <- color
           prev_textColor <- if (exists("textColor")) textColor else NULL
           colspan <- 1
-        } else if (identical(studentNum, prev_studentNum) && cell_label != "Break") {
+        } else if (identical(sn_vec_sorted, prev_sn_vec_sorted) && cell_label != "Break") {
           colspan <- colspan + 1
         } else {
           # Add previous cell
@@ -1836,7 +1832,7 @@ server <- function(input, output, session) {
             colspan = if (colspan > 1) colspan else NULL
           )
           # Start new cell
-          prev_studentNum <- studentNum
+          prev_sn_vec_sorted <- sn_vec_sorted
           prev_label <- cell_label
           prev_color <- color
           prev_textColor <- if (exists("textColor")) textColor else NULL
@@ -1854,7 +1850,7 @@ server <- function(input, output, session) {
       )
       do.call(tags$tr, c(cells, cell_info))
     })
-
+  
     tags$table(
       id = "schedule_template_table",
       style = "border-collapse:collapse;width:100%;",
@@ -1969,38 +1965,38 @@ server <- function(input, output, session) {
           for (j in seq_along(timeblock_cols)) {
             tb <- timeblock_cols[j]
             val <- row[[tb]]
-            # Extract studentNum for coloring
+            # Parse and sort studentNum list for merging
+            sn_vec <- unlist(strsplit(as.character(val), ","))
+            sn_vec <- trimws(sn_vec)
+            sn_vec <- sn_vec[sn_vec != ""]
+            sn_vec_sorted <- sort(sn_vec)
+            # Use for coloring (first student), but merge logic uses full sorted list
+            cell_label <- if (is.na(val) || val == "") "Break" else val
             studentNum <- NA
-            cell_label <- val
-            if (is.na(val) || val == "") {
-              cell_label <- "Break"
-              color <- "#717171"
-              textColor <- "white"
-            } else {
-              matches <- regmatches(val, regexpr("^[0-9]+", val))
-              if (length(matches) > 0 && matches != "") {
-                studentNum <- as.integer(matches)
-              }
-              # Only color if student name is present (i.e., val contains ". ")
-              if (!is.na(studentNum) && grepl("\\. ", val)) {
-                color <- "#FFFFFF"
-                textColor <- NULL
-                if (studentNum %in% data$fillColor$studentNum) {
-                  color <- data$fillColor$code[data$fillColor$studentNum == studentNum]
-                }
-              } else {
-                color <- NULL
-                textColor <- NULL
-              }
+            matches <- regmatches(val, regexpr("^[0-9]+", val))
+            if (length(matches) > 0 && matches != "") {
+              studentNum <- as.integer(matches)
             }
-            # Merge logic
+            # Only color if student name is present (i.e., val contains ". ")
+            if (!is.na(studentNum) && grepl("\\. ", val)) {
+              color <- "#FFFFFF"
+              textColor <- NULL
+              if (studentNum %in% data$fillColor$studentNum) {
+                color <- data$fillColor$code[data$fillColor$studentNum == studentNum]
+              }
+            } else {
+              color <- NULL
+              textColor <- NULL
+            }
+            print(paste("studentNum", studentNum, color, textColor, cell_label))
+            # Merge logic: compare full sorted studentNum list
             if (j == 1) {
-              prev_studentNum <- studentNum
+              prev_sn_vec_sorted <- sn_vec_sorted
               prev_label <- cell_label
               prev_color <- color
               prev_textColor <- if (exists("textColor")) textColor else NULL
               colspan <- 1
-            } else if (identical(studentNum, prev_studentNum) && cell_label != "Break") {
+            } else if (identical(sn_vec_sorted, prev_sn_vec_sorted) && cell_label != "Break") {
               colspan <- colspan + 1
             } else {
               # Add previous cell
@@ -2012,7 +2008,7 @@ server <- function(input, output, session) {
                 colspan = if (colspan > 1) colspan else NULL
               )
               # Start new cell
-              prev_studentNum <- studentNum
+              prev_sn_vec_sorted <- sn_vec_sorted
               prev_label <- cell_label
               prev_color <- color
               prev_textColor <- if (exists("textColor")) textColor else NULL
