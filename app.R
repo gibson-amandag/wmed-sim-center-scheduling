@@ -650,8 +650,8 @@ server <- function(input, output, session) {
   
   # --- Faculty Assignment Update Function ---
   update_faculty_assignments <- function() {
+    req(input$tmpl_num_groups, input$tmpl_num_stations, input$tmpl_max_students, input$tmpl_num_starttimes)
     isolate({
-      req(input$tmpl_num_groups, input$tmpl_num_stations, input$tmpl_max_students)
       if (input$faculty_assign_mode == "room") {
         for (g in seq_len(input$tmpl_num_groups)) {
           for (i in seq_len(input$tmpl_num_stations)) {
