@@ -125,6 +125,8 @@ generate_group_schedules <- function(data) {
       })
     }
 
+    sched_with_faculty[time_blocks] <- lapply(sched_with_faculty[time_blocks], as.character)
+
     # Long version: one row per station/time block
     long_sched <- tidyr::pivot_longer(
       sched_with_faculty,
