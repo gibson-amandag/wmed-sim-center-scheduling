@@ -99,24 +99,29 @@ generate_group_schedules <- function(data) {
         if (is.na(sn) || sn == "") {
           return("")
         }
-        stu <- group_students[group_students$studentNum == sn, ]
-        fac <- NULL
-        if (faculty_by_student) {
-          fac_row <- data$faculty[data$faculty$groupNum == group & data$faculty$studentNum == as.integer(sn), ]
-          if (nrow(fac_row) > 0 && !is.na(fac_row$faculty[1]) && fac_row$faculty[1] != "") {
-            fac <- fac_row$faculty[1]
+        sn_vec <- unlist(strsplit(as.character(sn), ","))
+        sn_vec <- sn_vec[sn_vec != ""]
+        labels <- sapply(sn_vec, function(snv) {
+          stu <- group_students[group_students$studentNum == as.integer(snv), ]
+          fac <- NULL
+          if (faculty_by_student) {
+            fac_row <- data$faculty[data$faculty$groupNum == group & data$faculty$studentNum == as.integer(snv), ]
+            if (nrow(fac_row) > 0 && !is.na(fac_row$faculty[1]) && fac_row$faculty[1] != "") {
+              fac <- fac_row$faculty[1]
+            }
           }
-        }
-        label <- if (nrow(stu) > 0) {
-          paste0(stu$studentNum, ". ", stu$lastName, ", ", stu$firstName)
-        } else {
-          as.character(sn)
-        }
-        if (!is.null(fac)) {
-          paste0(label, " (", fac, ")")
-        } else {
-          label
-        }
+          label <- if (nrow(stu) > 0) {
+            paste0(stu$studentNum, ". ", stu$lastName, ", ", stu$firstName)
+          } else {
+            as.character(snv)
+          }
+          if (!is.null(fac)) {
+            paste0(label, " (", fac, ")")
+          } else {
+            label
+          }
+        })
+        paste(labels, collapse = "; ")
       })
     }
 
@@ -125,9 +130,13 @@ generate_group_schedules <- function(data) {
       sched_with_faculty,
       cols = all_of(time_blocks),
       names_to = "timeBlock",
-      values_to = "studentNum",
-      values_transform = list(studentNum = as.integer)
+      values_to = "studentNum"
     ) %>%
+      # Split comma-separated studentNums into multiple rows
+      tidyr::separate_rows(studentNum, sep = ",") %>%
+      mutate(studentNum = trimws(studentNum)) %>%
+      filter(studentNum != "") %>%
+      mutate(studentNum = as.integer(studentNum)) %>%
       left_join(group_students, by = "studentNum") %>%
       left_join(data$fillColor, by = "studentNum") %>%
       mutate(
@@ -1240,12 +1249,21 @@ server <- function(input, output, session) {
   check_duplicate_station_assignments <- function(n_stations, n_blocks, input) {
     warnings <- list()
     for (j in seq_len(n_blocks)) {
+      # Gather all student assignments for this block
       selected <- sapply(seq_len(n_stations), function(i) {
-        input[[paste0("sched_", i, "_", j)]]
+        val <- input[[paste0("sched_", i, "_", j)]]
+        # If multiple selected, collapse to comma-separated string
+        if (is.null(val)) return("")
+        if (length(val) == 0) return("")
+        paste(as.character(val), collapse = ",")
       })
+      # Flatten: split all comma-separated values into individual student numbers
+      selected_flat <- unlist(strsplit(as.character(selected), ","))
+      selected_flat <- trimws(selected_flat)
       # Remove blanks/breaks
-      selected <- selected[selected != "" & !is.na(selected)]
-      dups <- selected[duplicated(selected)]
+      selected_flat <- selected_flat[selected_flat != "" & !is.na(selected_flat)]
+      # Check for duplicates
+      dups <- selected_flat[duplicated(selected_flat)]
       if (length(dups) > 0) {
         dups <- unique(dups)
         warnings[[length(warnings) + 1]] <- paste(
@@ -1263,7 +1281,7 @@ server <- function(input, output, session) {
     n_blocks <- input$tmpl_num_timeblocks
     warnings <- check_duplicate_station_assignments(n_stations, n_blocks, input)
     if (length(warnings) > 0) {
-      div(
+      warning <- div(
         style = "color: #b30000; font-weight: bold; margin-bottom: 10px;",
         tagList(
           "Warning: The following students are assigned to multiple stations in the same block:",
@@ -1271,6 +1289,7 @@ server <- function(input, output, session) {
         )
       )
       anyErrors$duplicateStations <- TRUE
+      warning
     } else {
       anyErrors$duplicateStations <- FALSE
       NULL
@@ -1768,33 +1787,44 @@ server <- function(input, output, session) {
       }
       cells <- list(tags$td(station_info, style = station_style))
       prev_studentNum <- NULL
+      prev_label <- NULL
+      prev_color <- NULL
+      prev_textColor <- NULL
       colspan <- 1
       cell_info <- list()
       for (j in seq_along(timeblock_cols)) {
         tb <- timeblock_cols[j]
-        studentNum <- as.integer(row[[tb]])
-        # Determine color and label
-        if (!is.na(studentNum) && studentNum %in% fill$studentNum) {
-          color <- fill$code[fill$studentNum == studentNum]
-          label <- as.character(studentNum)
-          textColor <- NULL
-        } else if (is.na(studentNum) || studentNum == "") {
+        val <- row[[tb]]
+        # Handle multiple students: use first for color, show all for label
+        studentNum <- NA
+        cell_label <- val
+        if (is.na(val) || val == "") {
+          cell_label <- "Break"
           color <- "#717171"
-          label <- "Break"
           textColor <- "white"
         } else {
-          color <- "#FFFFFF"
-          label <- as.character(studentNum)
-          textColor <- NULL
+          sn_vec <- unlist(strsplit(as.character(val), ","))
+          sn_vec <- trimws(sn_vec)
+          if (length(sn_vec) > 0 && sn_vec[1] != "" && !is.na(sn_vec[1])) {
+            studentNum <- suppressWarnings(as.integer(sn_vec[1]))
+          }
+          # Only color if studentNum is valid
+          if (!is.na(studentNum) && studentNum %in% fill$studentNum) {
+            color <- fill$code[fill$studentNum == studentNum]
+            textColor <- NULL
+          } else {
+            color <- "#FFFFFF"
+            textColor <- NULL
+          }
         }
         # Merge logic
         if (j == 1) {
           prev_studentNum <- studentNum
-          prev_label <- label
+          prev_label <- cell_label
           prev_color <- color
           prev_textColor <- if (exists("textColor")) textColor else NULL
           colspan <- 1
-        } else if (identical(studentNum, prev_studentNum) && label != "Break") {
+        } else if (identical(studentNum, prev_studentNum) && cell_label != "Break") {
           colspan <- colspan + 1
         } else {
           # Add previous cell
@@ -1807,7 +1837,7 @@ server <- function(input, output, session) {
           )
           # Start new cell
           prev_studentNum <- studentNum
-          prev_label <- label
+          prev_label <- cell_label
           prev_color <- color
           prev_textColor <- if (exists("textColor")) textColor else NULL
           colspan <- 1
@@ -3384,8 +3414,13 @@ server <- function(input, output, session) {
         inputId <- paste0("sched_", i, "_", j)
         val <- input[[inputId]]
         colname <- paste0("TimeBlock", j)
+        # If multiple students are selected, store as comma-separated string
         if (!is.null(val)) {
-          schedule[i, colname] <- val
+          if (length(val) > 1) {
+            schedule[i, colname] <- paste(val, collapse = ",")
+          } else {
+            schedule[i, colname] <- val
+          }
         }
       }
     }
