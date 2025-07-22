@@ -1196,16 +1196,17 @@ server <- function(input, output, session) {
           # Get the selected value for this selectInput
           selected_val <- input[[inputId]]
           # Determine background color
-          bg_color <- if (!is.null(selected_val) && selected_val != "" && selected_val %in% names(student_colors)) {
-            student_colors[[selected_val]]
-          } else if (!is.null(selected_val) && selected_val == "") {
-            "#e8e8e8"
+          # Use first student for color if any selected
+          if (!is.null(selected_val) && length(selected_val) > 0 && selected_val[1] != "" && selected_val[1] %in% names(student_colors)) {
+            bg_color <- student_colors[[selected_val[1]]]
+          } else if (!is.null(selected_val) && length(selected_val) == 1 && selected_val == "") {
+            bg_color <- "#e8e8e8"
           } else {
-            "#FFFFFF"
+            bg_color <- "#FFFFFF"
           }
           tags$td(
             style = paste0("background-color:", bg_color, ";"),
-            selectInput(inputId, NULL, choices = student_choices, selected = selected_val, width = "100%")
+            selectizeInput(inputId, NULL, choices = student_choices, selected = selected_val, multiple = TRUE, width = "100%")
           )
         })
       )
