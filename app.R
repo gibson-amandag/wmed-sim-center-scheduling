@@ -1996,7 +1996,6 @@ server <- function(input, output, session) {
               color <- NULL
               textColor <- NULL
             }
-            print(paste("studentNum", studentNum, color, textColor, cell_label))
             # Merge logic: compare full sorted studentNum list
             if (j == 1) {
               prev_sn_vec_sorted <- sn_vec_sorted
@@ -2490,29 +2489,30 @@ server <- function(input, output, session) {
     }
     
     tags$table(
+      id = "event_overview_calendar_table",
       style = "border-collapse:collapse;width:100%;margin:auto;",
       tags$thead(header1),
       tags$tbody(body_rows)
     ) %>%
       tagAppendChild(
         tags$style(HTML("
-          table tr th, table tr td {
+          #event_overview_calendar_table tr th, #event_overview_calendar_table tr td {
             border: 1px solid #333 !important;
             padding: 4px 8px !important;
           }
-          table tr th {
+          #event_overview_calendar_table tr th {
             background: #f8f9fa;
             font-weight: bold;
             text-align: center;
           }
-          table tr td {
+          #event_overview_calendar_table tr td {
             text-align: center;
           }
           .thick-border-left {
             border-left: 4px solid #333 !important;
           }
           /* Standardize row height for the Time column */
-          table tr td:first-child {
+          #event_overview_calendar_table tr td:first-child {
             min-height: 28px;
             height: 28px;
           }
@@ -3046,7 +3046,7 @@ server <- function(input, output, session) {
                   row$niceName,
                   if (!is.null(row$room1) && !is.na(row$room1) && row$room1 != "") paste0("\nRoom: ", row$room1) else "",
                   if (!is.null(row$room2) && !is.na(row$room2) && row$room2 != "") paste0("\nRoom: ", row$room2) else "",
-                  if (!is.null(row$faculty) && !is.na(row$faculty) && row$faculty != "") paste0("\nFaculty: ", row$faculty) else "Faculty: TBD",
+                  if (!is.null(row$faculty) && !is.na(row$faculty) && row$faculty != "") paste0("\nFaculty: ", row$faculty) else "",
                   if (!is.null(row$notes) && !is.na(row$notes) && row$notes != "") paste0("\nNotes: ", row$notes) else ""
                 )
                 # Add stationColor for later styling
@@ -3166,40 +3166,48 @@ server <- function(input, output, session) {
                 }
                 if (nrow(station_long) == 0) next
     
-                # Prepare merged rows as in the app
-                n <- nrow(station_long)
+                # --- Merge logic: group by set of studentNums, merge consecutive blocks ---
+                block_df <- station_long %>%
+                  group_by(timeBlock) %>%
+                  summarise(
+                    studentNums = list(sort(unique(studentNum[!is.na(studentNum)]))),
+                    studentLabels = list(studentLabel[!is.na(studentLabel) & studentLabel != ""]),
+                    faculties = list(faculty[!is.na(faculty) & faculty != ""]),
+                    .groups = "drop"
+                  )
+                block_df$merge_key <- sapply(block_df$studentNums, function(x) paste(sort(x), collapse = ","))
+    
                 rows <- list()
+                n <- nrow(block_df)
                 i_row <- 1
                 while (i_row <= n) {
-                  row <- station_long[i_row, ]
-                  # Find how many subsequent rows have the same studentLabel
-                  rowspan <- 1
-                  while (
-                    i_row + rowspan <= n &&
-                    !is.na(station_long$studentLabel[i_row]) &&
-                    !is.na(station_long$studentLabel[i_row + rowspan]) &&
-                    station_long$studentLabel[i_row] == station_long$studentLabel[i_row + rowspan]
-                  ) {
-                    rowspan <- rowspan + 1
+                  merge_key <- block_df$merge_key[i_row]
+                  span <- 1
+                  while (i_row + span <= n && block_df$merge_key[i_row + span] == merge_key) {
+                    span <- span + 1
                   }
-                  # Only add the merged cell for the first row in the group
-                  for (j in 0:(rowspan - 1)) {
-                    idx <- i_row + j
-                    this_row <- station_long[idx, ]
-                    tb_time <- if (!is.null(sched$timeblock_times[[this_row$timeBlock]])) sched$timeblock_times[[this_row$timeBlock]] else this_row$timeBlock
-                    if (j == 0) {
-                      student_info <- paste0(
-                        if (!is.null(this_row$studentLabel) && !is.na(this_row$studentLabel) && this_row$studentLabel != "") paste0("Student: ", this_row$studentLabel) else "Break",
-                        if (sched$faculty_by_student && !is.null(this_row$faculty) && !is.na(this_row$faculty) && this_row$faculty != "") paste0("\nFaculty: ", this_row$faculty) else ""
-                      )
-                      studentNum <- if (!is.null(this_row$studentNum) && !is.na(this_row$studentNum)) this_row$studentNum else NA
-                      student_color <- if (!is.na(studentNum) && studentNum %in% data$fillColor$studentNum) data$fillColor$code[data$fillColor$studentNum == studentNum] else NA
-                      rows[[length(rows) + 1]] <- c(tb_time, student_info, student_color, rowspan)
-                    } else {
-                      rows[[length(rows) + 1]] <- c(tb_time, "", NA, 1)
-                    }
+                  # Compose student info
+                  studentLabels <- unique(unlist(block_df$studentLabels[i_row]))
+                  faculties <- unique(unlist(block_df$faculties[i_row]))
+                  if (length(studentLabels) > 0) {
+                    student_info <- paste0("Student: ", paste(studentLabels, collapse = "; "))
+                  } else {
+                    student_info <- "Break"
                   }
-                  i_row <- i_row + rowspan
+                  if (sched$faculty_by_student && length(faculties) > 0) {
+                    student_info <- paste0(student_info, "\nFaculty: ", paste(faculties, collapse = "; "))
+                  }
+                  # Color: use first studentNum if present
+                  studentNum <- if (length(block_df$studentNums[[i_row]]) > 0) block_df$studentNums[[i_row]][1] else NA
+                  student_color <- if (!is.na(studentNum) && studentNum %in% data$fillColor$studentNum) data$fillColor$code[data$fillColor$studentNum == studentNum] else NA
+                  # Time label: merge all block times, newline separated
+                  tb_times <- sapply(i_row:(i_row + span - 1), function(idx) {
+                    tb <- block_df$timeBlock[idx]
+                    if (!is.null(sched$timeblock_times[[tb]])) sched$timeblock_times[[tb]] else tb
+                  })
+                  time_label <- if (length(tb_times) == 1) tb_times else paste(tb_times, collapse = "\n")
+                  rows[[length(rows) + 1]] <- c(time_label, student_info, student_color, span)
+                  i_row <- i_row + span
                 }
                 df <- as.data.frame(do.call(rbind, rows), stringsAsFactors = FALSE)
                 names(df) <- c("Time", "Student Info", "studentColor", "rowspan")
@@ -3226,12 +3234,6 @@ server <- function(input, output, session) {
                 wrap_style <- createStyle(wrapText = TRUE)
                 addStyle(wb, ws_name, wrap_style, rows = (length(info_lines) + 2):(nrow(df) + length(info_lines) + 2), cols = 1:2, gridExpand = TRUE, stack = TRUE)
     
-                # Merge cells for student info if rowspan > 1
-                for (r in seq_len(nrow(df))) {
-                  if (df$rowspan[r] > 1 && df$`Student Info`[r] != "") {
-                    mergeCells(wb, ws_name, cols = 2, rows = (r + length(info_lines) + 2):(r + length(info_lines) + 2 + df$rowspan[r] - 1))
-                  }
-                }
                 # Add color formatting for student info cells (column 2)
                 for (r in seq_len(nrow(df))) {
                   scol <- df$studentColor[r]
@@ -3258,7 +3260,6 @@ server <- function(input, output, session) {
         )
       }
     )
-
   ########################
   ## Template Creator Logic
   ########################
