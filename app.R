@@ -826,15 +826,13 @@ server <- function(input, output, session) {
           } else {
             as.character(i)
           }
-          # print(
-          #   str(timeOfDay_val),
-          #   str(get_start_time_label(timeOfDay_val, start_time_names))
-          # )
+          # Use existing group color if present, else default
+          groupColor_val <- if (!is.null(group) && !is.null(group$groupColor) && group$groupColor != "") group$groupColor else "#e0f7fa"
           fluidRow(
             column(3, textInput(paste0(prefix, "groupNum"), paste0("Group ", i, " Name"), value = groupNum_val)),
             column(3, dateInput(paste0(prefix, "date"), "Date", value = if (!is.null(date_val)) date_val else NULL)),
             column(3, selectInput(paste0(prefix, "timeOfDay"), "Time of Day", choices = time_of_day_choices, selected = timeOfDay_val)),
-            column(3, colourpicker::colourInput(paste0(prefix, "groupColor"), "Group Color", value = "#e0f7fa"))
+            column(3, colourpicker::colourInput(paste0(prefix, "groupColor"), "Group Color", value = groupColor_val))
           )
         })
       )
