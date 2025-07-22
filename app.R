@@ -1324,6 +1324,7 @@ server <- function(input, output, session) {
     })
 
     update_tmpl_group_info()
+    update_faculty_assignments()
     group_panels <- lapply(seq_len(num_groups), function(g) {
       # Use group name from group info if available
       group_label <- {
